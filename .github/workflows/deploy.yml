@@ -36,9 +36,14 @@ jobs:
 
       - name: Gerar o site
         run: npm run build
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
 
       - name: Configurar o GitHub Pages
         uses: actions/configure-pages@v6
+        with:
+          enablement: true
 
       - name: Preparar os arquivos do site
         uses: actions/upload-pages-artifact@v5

@@ -24,6 +24,12 @@ Se uma tentativa antiga deixou uma pasta `node_modules` incompleta, apague somen
 - titulares, banco e substituições durante a partida;
 - súmula com minuto de cada lance e correção de gol;
 - histórico de partidas e artilharia separada por mês;
-- salvamento automático no navegador.
+- salvamento automático no navegador;
+- sincronização opcional com Supabase entre celulares;
+- tela inicial obrigatória de login;
+- contas protegidas por e-mail e senha;
+- jogadores e históricos separados por usuário;
+- exportação e importação de backup em JSON;
+- modo claro e modo escuro com preferência salva.
 
-Os dados ficam no `localStorage`. Ao limpar os dados do navegador, o histórico também é apagado.
+O login depende do Supabase. Para configurar o banco e a autenticação, siga o arquivo `CONFIGURAR_SUPABASE.md`.

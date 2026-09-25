@@ -9,7 +9,7 @@ Esta configuração é necessária para liberar a tela de login e manter os dado
 3. No painel do projeto, abra **SQL Editor**.
 4. Copie todo o conteúdo de `supabase/schema.sql`, cole no editor e clique em **Run**.
 
-Se o projeto já estava configurado, execute o arquivo novamente depois desta atualização. Ele mantém os dados existentes e reforça a segurança removendo qualquer permissão direta do papel anônimo.
+Se o projeto já estava configurado, execute o arquivo inteiro novamente depois desta atualização. Ele mantém a tabela antiga para migração, cria as tabelas separadas de grupos, jogadores, partidas, treinos e presença e atualiza as políticas de segurança.
 
 ## 2. Localizar a URL do projeto
 
@@ -57,9 +57,9 @@ Nunca copie a **Secret key**, a chave `service_role` ou qualquer chave que comec
 ## 4. Configurar os endereços de login e recuperação de senha
 
 1. No Supabase, abra **Authentication > URL Configuration**.
-2. Em **Site URL**, informe `https://quintava.github.io/Pelada_da_semana/`.
-3. Em **Redirect URLs**, adicione também `https://quintava.github.io/Pelada_da_semana/`. Esse endereço é usado tanto na confirmação do cadastro quanto no botão **Esqueci minha senha**.
-4. Para testar no computador, adicione `http://localhost:5173/Pelada_da_semana/` nas URLs permitidas.
+2. Em **Site URL**, informe `https://quintava.github.io/resenha/`.
+3. Em **Redirect URLs**, adicione também `https://quintava.github.io/resenha/`. Esse endereço é usado tanto na confirmação do cadastro quanto no botão **Esqueci minha senha**.
+4. Para testar no computador, adicione `http://localhost:5173/resenha/` nas URLs permitidas.
 
 ## 5. Testar no computador
 
@@ -86,6 +86,14 @@ No repositório do GitHub, acesse **Settings > Secrets and variables > Actions**
 
 Depois faça um novo commit ou execute novamente o workflow em **Actions**.
 
-## 7. Contas e dados separados
+## 7. Depois de renomear o repositório
 
-O aplicativo só abre depois do login. Cada conta possui jogadores, partidas e artilharia próprios. Para acessar o mesmo grupo em outro celular, entre com a mesma conta. Cada alteração também fica salva localmente de forma separada por usuário e é sincronizada automaticamente quando houver internet.
+1. Confirme que `vite.config.js` contém `base: "/resenha/"`.
+2. No GitHub, abra **Settings > Pages** e selecione **GitHub Actions** como origem.
+3. Em **Actions**, execute novamente **Publicar no GitHub Pages**.
+4. Os secrets continuam os mesmos e não precisam ser recriados.
+5. O endereço final será `https://quintava.github.io/resenha/`.
+
+## 8. Contas, grupos e dados
+
+O aplicativo só abre depois do login. Cada conta pode criar ou participar de vários grupos. Os administradores cuidam dos jogadores e permissões; os mesários controlam as partidas; quem está em visualização apenas acompanha. Treinos continuam privados da conta. Cada alteração também fica salva localmente por grupo e é sincronizada automaticamente quando houver internet.

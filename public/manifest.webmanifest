@@ -1,0 +1,17 @@
+{
+  "name": "Resenha",
+  "short_name": "Resenha",
+  "description": "Organize jogadores, times, partidas, presença, rankings e treinos.",
+  "id": "/resenha/",
+  "start_url": "/resenha/",
+  "scope": "/resenha/",
+  "display": "standalone",
+  "background_color": "#071712",
+  "theme_color": "#0d8f67",
+  "lang": "pt-BR",
+  "orientation": "portrait-primary",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

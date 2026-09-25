@@ -1,8 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, ArrowDownUp, ArrowLeft, BarChart3, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, CirclePause, CirclePlay, ClipboardList, Clock3, Cloud, CloudOff, Download, Dumbbell, Eye, EyeOff, Goal, KeyRound, LockKeyhole, LogOut, Mail, Medal, Menu, Moon, Pencil, Plus, RefreshCw, RotateCcw, Save, Settings, Shield, Sparkles, Sun, Trash2, TrendingUp, Trophy, Upload, UserPlus, UserRound, Users, X } from "lucide-react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Activity, ArrowDownUp, ArrowLeft, BarChart3, Bell, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, CirclePause, CirclePlay, ClipboardList, Clock3, Cloud, CloudOff, Download, Dumbbell, Eye, EyeOff, Goal, KeyRound, LockKeyhole, LogOut, Mail, Medal, Menu, Moon, Pencil, Plus, RefreshCw, Repeat2, RotateCcw, Save, Settings, Share2, Shield, Sparkles, Sun, Trash2, TrendingUp, Trophy, Upload, UserPlus, UserRound, Users, X } from "lucide-react";
 import { supabase, supabaseConfigured } from "./supabase";
+import { bootstrapWorkspace, joinGroup, listGroups, loadLatestAttendance, loadWorkspace, saveWorkspace } from "./dataService";
+
+const GroupHub = lazy(() => import("./GroupHub"));
+const PublicGroupPage = lazy(() => import("./PublicGroupPage"));
+const AttendancePage = lazy(() => import("./AttendancePage"));
 
 const LEGACY_STORAGE_KEY = "pelada-da-semana-v4";
 const USER_STORAGE_PREFIX = "pelada-da-semana-user";
@@ -151,6 +156,7 @@ function readSaved(key) {
 }
 
 const userStorageKey = (userId) => `${USER_STORAGE_PREFIX}:${userId}`;
+const groupStorageKey = (userId, groupId) => `${USER_STORAGE_PREFIX}:${userId}:${groupId}`;
 const hasSavedContent = (saved) => saved.players.length > 0 || saved.history.length > 0 || Boolean(saved.activeMatch) || (saved.trainingPlans || []).length > 0 || (saved.trainingHistory || []).length > 0 || Boolean(saved.activeTraining);
 
 function shuffle(items) {
@@ -237,6 +243,10 @@ export default function Home() {
   const [authMessage, setAuthMessage] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
   const [syncStatus, setSyncStatus] = useState(supabaseConfigured ? "offline" : "local");
+  const [groups, setGroups] = useState([]);
+  const [activeGroupId, setActiveGroupId] = useState("");
+  const [installPrompt, setInstallPrompt] = useState(null);
+  const [reminderAt, setReminderAt] = useState(() => localStorage.getItem("resenha-reminder-at") || "");
   const nameInput = useRef(null);
   const importInput = useRef(null);
   const profileMenuRef = useRef(null);
@@ -245,6 +255,9 @@ export default function Home() {
   const dirtyRef = useRef(false);
   const syncingRef = useRef(false);
   const cloudLoadedUser = useRef(null);
+  const activeGroup = groups.find((group) => group.id === activeGroupId) || null;
+  const canScore = ["admin", "scorekeeper"].includes(activeGroup?.role);
+  const canManage = activeGroup?.role === "admin";
   const playerStats = useMemo(() => buildPlayerStats(data.players, data.history), [data.players, data.history]);
   const managedPlayers = useMemo(() => {
     const players = new Map(data.players.map((player) => [player.id, { ...player, registered: true, totalPoints: 0, totalAssists: 0 }]));
@@ -267,6 +280,21 @@ export default function Home() {
     (match.events || []).filter((event) => event.type === "goal").forEach((event) => totals.set(event.playerId, { id: event.playerId, name: event.playerName, points: (totals.get(event.playerId)?.points || 0) + 1 }));
     return [...totals.values()].sort((a, b) => b.points - a.points || a.name.localeCompare(b.name)).slice(0, 3);
   }, [data.history]);
+  const achievements = useMemo(() => {
+    const last = data.history[0];
+    if (!last) return [];
+    const assists = new Map();
+    (last.events || []).filter((event) => event.type === "goal" && event.assistPlayerId).forEach((event) => assists.set(event.assistPlayerId, { name: event.assistPlayerName, value: (assists.get(event.assistPlayerId)?.value || 0) + 1 }));
+    const assistLeader = [...assists.values()].sort((a, b) => b.value - a.value)[0];
+    const presence = new Map();
+    data.history.forEach((game) => (game.attendanceIds || []).forEach((id) => presence.set(id, (presence.get(id) || 0) + 1)));
+    const presenceLeader = [...presence.entries()].sort((a, b) => b[1] - a[1])[0];
+    const items = [];
+    if (lastMatchLeaders[0]) items.push({ icon: "👑", title: "Craque da rodada", name: lastMatchLeaders[0].name });
+    if (assistLeader) items.push({ icon: "🎯", title: "Garçom da rodada", name: assistLeader.name });
+    if (presenceLeader) items.push({ icon: "🔥", title: "Presença de ferro", name: data.players.find((player) => player.id === presenceLeader[0])?.name || "Atleta" });
+    return items;
+  }, [data.history, data.players, lastMatchLeaders]);
   const displayName = data.profile?.displayName?.trim() || session?.user?.user_metadata?.display_name || session?.user?.email?.split("@")[0] || "Usuário";
   const attendanceConfigured = Array.isArray(data.settings.attendanceIds);
   const presentPlayers = useMemo(() => data.players.filter((player) => !attendanceConfigured || data.settings.attendanceIds.includes(player.id)), [data.players, data.settings.attendanceIds, attendanceConfigured]);
@@ -316,17 +344,39 @@ export default function Home() {
   }, [playerPage, playerPageCount]);
 
   useEffect(() => {
-    if (ready && session?.user) {
-      localStorage.setItem(userStorageKey(session.user.id), JSON.stringify(data));
+    if (ready && session?.user && activeGroupId) {
+      localStorage.setItem(groupStorageKey(session.user.id, activeGroupId), JSON.stringify(data));
       dataRef.current = data;
       dirtyRef.current = true;
     }
-  }, [data, ready, session?.user?.id]);
+  }, [data, ready, session?.user?.id, activeGroupId]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem(THEME_KEY, theme);
   }, [theme]);
+
+  useEffect(() => {
+    const capture = (event) => { event.preventDefault(); setInstallPrompt(event); };
+    window.addEventListener("beforeinstallprompt", capture);
+    if ("serviceWorker" in navigator) navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`).catch(() => {});
+    return () => window.removeEventListener("beforeinstallprompt", capture);
+  }, []);
+
+  useEffect(() => {
+    if (!reminderAt || !("Notification" in window)) return undefined;
+    const check = async () => {
+      const time = new Date(reminderAt).getTime();
+      const sentKey = `resenha-reminder-sent:${reminderAt}`;
+      if (Date.now() >= time && !localStorage.getItem(sentKey) && Notification.permission === "granted") {
+        const registration = await navigator.serviceWorker?.ready;
+        if (registration) registration.showNotification("Hora da Resenha!", { body: `${activeGroup?.name || "Seu jogo"} está chegando. Confirme a presença e prepare os times.`, icon: `${import.meta.env.BASE_URL}icons/icon-192.png` });
+        else new Notification("Hora da Resenha!", { body: "Confirme a presença e prepare os times." });
+        localStorage.setItem(sentKey, "1");
+      }
+    };
+    check(); const interval = window.setInterval(check, 30000); return () => window.clearInterval(interval);
+  }, [reminderAt, activeGroup?.name]);
 
   useEffect(() => {
     setStatsSport(canonicalSport(data.settings.sport));
@@ -356,76 +406,79 @@ export default function Home() {
     if (!authReady || !session?.user) {
       setReady(false);
       cloudLoadedUser.current = null;
+      setGroups([]);
+      setActiveGroupId("");
       return;
     }
-    const key = userStorageKey(session.user.id);
-    let saved = readSaved(key);
-    const migrationOwner = localStorage.getItem(MIGRATION_OWNER_KEY);
-    if (!hasSavedContent(saved) && !migrationOwner) {
-      const legacy = readSaved(LEGACY_STORAGE_KEY);
-      if (hasSavedContent(legacy)) {
-        saved = legacy;
-        localStorage.setItem(MIGRATION_OWNER_KEY, session.user.id);
+    let cancelled = false;
+    setSyncStatus("loading");
+    bootstrapWorkspace(session.user.id, session.user.user_metadata?.display_name || "Minha").then(async ({ groups: nextGroups, activeGroupId: nextId }) => {
+      if (cancelled) return;
+      const inviteCode = new URLSearchParams(window.location.search).get("convite");
+      if (inviteCode) {
+        try {
+          nextId = await joinGroup(inviteCode);
+          nextGroups = await listGroups();
+          window.history.replaceState({}, "", import.meta.env.BASE_URL);
+          setAuthMessage("Convite aceito. Você já pode acessar o grupo.");
+        } catch {
+          setAuthMessage("O convite informado é inválido ou não está mais disponível.");
+        }
       }
-    }
-    setData(saved);
-    dataRef.current = saved;
-    setView(saved.activeMatch ? "match" : "setup");
-    setReady(true);
+      const remembered = localStorage.getItem(`resenha-active-group:${session.user.id}`);
+      const selected = inviteCode && nextGroups.some((group) => group.id === nextId) ? nextId : nextGroups.some((group) => group.id === remembered) ? remembered : nextId;
+      setGroups(nextGroups);
+      setActiveGroupId(selected || "");
+    }).catch((error) => { if (!cancelled) { setSyncStatus("error"); setAuthMessage(`Atualize o banco com o novo schema.sql: ${error.message}`); setReady(true); } });
+    return () => { cancelled = true; };
   }, [authReady, session?.user?.id]);
 
   useEffect(() => {
-    if (!ready || !session?.user || !supabaseConfigured) {
+    if (!session?.user || !activeGroupId || !supabaseConfigured) {
       cloudLoadedUser.current = null;
       return undefined;
     }
     let cancelled = false;
     const loadCloud = async () => {
       setSyncStatus("loading");
-      const { data: cloudRow, error } = await supabase.from("app_state").select("data").eq("user_id", session.user.id).maybeSingle();
-      if (cancelled) return;
-      if (error) {
-        setSyncStatus("error");
-        setAuthMessage(`Não foi possível carregar a nuvem: ${error.message}`);
-        return;
-      }
-      if (cloudRow?.data) {
-        const removedLegacyAvatar = Boolean(cloudRow.data.profile?.avatar);
-        const cloudData = normalizeState(cloudRow.data);
+      try {
+        const local = readSaved(groupStorageKey(session.user.id, activeGroupId));
+        if (hasSavedContent(local)) { setData(local); dataRef.current = local; }
+        const cloudData = normalizeState(await loadWorkspace(activeGroupId, session.user.id, initialState));
+        if (cancelled) return;
         setData(cloudData);
         dataRef.current = cloudData;
-        if (cloudData.activeMatch) setView("match");
-        dirtyRef.current = removedLegacyAvatar;
-      } else {
-        const { error: uploadError } = await supabase.from("app_state").upsert({ user_id: session.user.id, data: dataRef.current, updated_at: new Date().toISOString() });
-        if (uploadError) {
-          setSyncStatus("error");
-          setAuthMessage(`Não foi possível criar o backup: ${uploadError.message}`);
-          return;
-        }
+        setView(cloudData.activeMatch ? "match" : "setup");
+        cloudLoadedUser.current = `${session.user.id}:${activeGroupId}`;
+        dirtyRef.current = false;
+        localStorage.setItem(`resenha-active-group:${session.user.id}`, activeGroupId);
+        setReady(true);
+        setSyncStatus("synced");
+      } catch (error) {
+        if (cancelled) return;
+        setSyncStatus("error");
+        setAuthMessage(`Não foi possível carregar a nuvem: ${error.message}`);
+        setReady(true);
       }
-      cloudLoadedUser.current = session.user.id;
-      if (!cloudRow?.data?.profile?.avatar) dirtyRef.current = false;
-      setSyncStatus("synced");
     };
     loadCloud();
     return () => { cancelled = true; };
-  }, [ready, session?.user?.id]);
+  }, [activeGroupId, session?.user?.id]);
 
   const syncNow = useCallback(async () => {
-    if (!supabaseConfigured || !session?.user || syncingRef.current || cloudLoadedUser.current !== session.user.id) return;
+    if (!supabaseConfigured || !session?.user || !activeGroupId || syncingRef.current || cloudLoadedUser.current !== `${session.user.id}:${activeGroupId}`) return;
     syncingRef.current = true;
     setSyncStatus("syncing");
-    const { error } = await supabase.from("app_state").upsert({ user_id: session.user.id, data: dataRef.current, updated_at: new Date().toISOString() });
-    syncingRef.current = false;
-    if (error) {
-      setSyncStatus("error");
-      setAuthMessage(`Falha ao sincronizar: ${error.message}`);
-    } else {
+    try {
+      await saveWorkspace(activeGroupId, session.user.id, dataRef.current);
       dirtyRef.current = false;
       setSyncStatus("synced");
+    } catch (error) {
+      setSyncStatus("error");
+      setAuthMessage(`Falha ao sincronizar: ${error.message}`);
     }
-  }, [session?.user?.id]);
+    syncingRef.current = false;
+  }, [activeGroupId, session?.user?.id]);
 
   useEffect(() => {
     if (!session?.user || !supabaseConfigured) return undefined;
@@ -433,7 +486,7 @@ export default function Home() {
       if (dirtyRef.current) syncNow();
     }, 3000);
     return () => window.clearInterval(interval);
-  }, [session?.user?.id, syncNow]);
+  }, [session?.user?.id, activeGroupId, syncNow]);
 
   useEffect(() => {
     if (!data.activeMatch?.running || data.activeMatch.remainingSeconds <= 0) return;
@@ -797,6 +850,63 @@ export default function Home() {
     setSettingsMessage("Partida e pontuações removidas do histórico.");
   };
 
+  const reloadGroups = async (preferredId = activeGroupId) => {
+    const nextGroups = await listGroups();
+    setGroups(nextGroups);
+    const nextId = nextGroups.some((group) => group.id === preferredId) ? preferredId : nextGroups[0]?.id || "";
+    if (nextId !== activeGroupId) { setReady(false); setActiveGroupId(nextId); }
+  };
+
+  const switchGroup = async (groupId) => {
+    if (groupId === activeGroupId) return;
+    if (dirtyRef.current) await syncNow();
+    setReady(false);
+    cloudLoadedUser.current = null;
+    setActiveGroupId(groupId);
+    setView("setup");
+  };
+
+  const importLatestAttendance = async () => {
+    try {
+      const latest = await loadLatestAttendance(activeGroupId);
+      if (!latest) { setSetupMessage("Nenhuma lista de presença aberta foi encontrada."); return; }
+      setData((current) => ({ ...current, settings: { ...current.settings, attendanceIds: latest.presentIds.filter((id) => current.players.some((player) => player.id === id)) } }));
+      setSetupMessage(`${latest.presentIds.length} presença(s) importada(s) de “${latest.title}”.`);
+    } catch (error) {
+      setSetupMessage(`Não foi possível atualizar as presenças: ${error.message}`);
+    }
+  };
+
+  const repeatLastMatch = () => {
+    const last = data.history[0];
+    if (!last) return;
+    const attendanceIds = (last.attendanceIds || last.teams?.flatMap((team) => [...(team.starters || []), ...(team.bench || [])].map((player) => player.id)) || []).filter((id) => data.players.some((player) => player.id === id));
+    setData((current) => ({ ...current, settings: { ...current.settings, sport: canonicalSport(last.sport), duration: Math.max(1, Math.round((last.durationSeconds || current.settings.duration * 60) / 60)), startersPerTeam: Math.max(1, last.teams?.[0]?.starters?.length || current.settings.startersPerTeam), attendanceIds } }));
+    setSetupMessage("Configuração e presença da última partida carregadas. Revise e abra o jogo.");
+    setView("setup");
+  };
+
+  const shareLastResult = async () => {
+    const game = data.history[0];
+    if (!game) return;
+    const canvas = document.createElement("canvas"); canvas.width = 1080; canvas.height = 1080;
+    const context = canvas.getContext("2d");
+    const gradient = context.createLinearGradient(0, 0, 1080, 1080); gradient.addColorStop(0, "#071f18"); gradient.addColorStop(1, "#0d8f67"); context.fillStyle = gradient; context.fillRect(0, 0, 1080, 1080);
+    context.fillStyle = "#9aebcd"; context.font = "700 30px Arial"; context.fillText((activeGroup?.name || "RESENHA").toUpperCase(), 70, 90);
+    context.fillStyle = "#ffffff"; context.font = "800 64px Arial"; context.fillText("Resultado da rodada", 70, 180);
+    context.font = "800 52px Arial"; context.fillText(game.teams?.[0]?.name || "Time 1", 70, 350); context.fillText(game.teams?.[1]?.name || "Time 2", 70, 520);
+    context.textAlign = "right"; context.font = "900 120px Arial"; context.fillText(String(game.score?.[0] || 0), 990, 370); context.fillText(String(game.score?.[1] || 0), 990, 540); context.textAlign = "left";
+    context.fillStyle = "#9aebcd"; context.font = "700 27px Arial"; context.fillText(`${game.sport} · ${new Date(game.finishedAt || game.date).toLocaleDateString("pt-BR")}`, 70, 650);
+    context.fillStyle = "#ffffff"; context.font = "700 32px Arial"; context.fillText("Destaques", 70, 745);
+    lastMatchLeaders.forEach((leader, index) => { context.font = "600 28px Arial"; context.fillText(`${index + 1}. ${leader.name} — ${leader.points} ${scoreWord(game.sport, leader.points)}`, 70, 805 + index * 55); });
+    context.fillStyle = "rgba(255,255,255,.65)"; context.font = "500 24px Arial"; context.fillText("Criado no Resenha", 70, 1010);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    const file = new File([blob], "resultado-resenha.png", { type: "image/png" });
+    const text = `${activeGroup?.name || "Resenha"}: ${game.teams?.[0]?.short || "Time 1"} ${game.score?.[0] || 0} × ${game.score?.[1] || 0} ${game.teams?.[1]?.short || "Time 2"}`;
+    if (navigator.canShare?.({ files: [file] })) await navigator.share({ title: "Resultado da Resenha", text, files: [file] });
+    else { const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = file.name; link.click(); URL.revokeObjectURL(url); }
+  };
+
   const changeLoggedPassword = async (event) => {
     event.preventDefault();
     if (!currentPassword) {
@@ -812,7 +922,13 @@ export default function Home() {
       return;
     }
     setAuthBusy(true);
-    const { error } = await supabase.auth.updateUser({ password: newPassword, current_password: currentPassword });
+    const { error: validationError } = await supabase.auth.signInWithPassword({ email: session.user.email, password: currentPassword });
+    if (validationError) {
+      setAuthBusy(false);
+      setSettingsMessage("A senha atual está incorreta.");
+      return;
+    }
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
     setAuthBusy(false);
     if (error) {
       setSettingsMessage(error.message.toLowerCase().includes("current") ? "A senha atual está incorreta." : "Não foi possível alterar a senha. Tente novamente.");
@@ -882,9 +998,14 @@ export default function Home() {
   };
 
   const syncLabel = { local: "Configuração pendente", offline: "Conectando...", loading: "Carregando...", syncing: "Salvando...", synced: "Nuvem sincronizada", error: "Erro na nuvem" }[syncStatus];
+  const params = new URLSearchParams(window.location.search);
+  const publicSlug = params.get("grupo");
+  const attendanceToken = params.get("presenca");
 
-  if (!authReady) return <main className="app-shell loading">Verificando acesso…</main>;
   if (!supabaseConfigured) return <AuthSetupRequired theme={theme} setTheme={setTheme} />;
+  if (publicSlug) return <Suspense fallback={<main className="app-shell loading">Carregando grupo…</main>}><PublicGroupPage slug={publicSlug} /></Suspense>;
+  if (attendanceToken) return <Suspense fallback={<main className="app-shell loading">Carregando presença…</main>}><AttendancePage token={attendanceToken} /></Suspense>;
+  if (!authReady) return <main className="app-shell loading">Verificando acesso…</main>;
   if (passwordRecovery) return <PasswordRecoveryScreen password={recoveryPassword} setPassword={setRecoveryPassword} confirm={recoveryConfirm} setConfirm={setRecoveryConfirm} message={authMessage} busy={authBusy} onSubmit={submitRecoveryPassword} onBack={() => { supabase.auth.signOut(); setPasswordRecovery(false); setAuthMessage(""); }} theme={theme} setTheme={setTheme} />;
   if (!session) return <AuthScreen mode={authMode} setMode={setAuthMode} email={authEmail} setEmail={setAuthEmail} password={authPassword} setPassword={setAuthPassword} showPassword={showPassword} setShowPassword={setShowPassword} message={authMessage} busy={authBusy} onSubmit={submitAuth} onForgot={sendPasswordReset} theme={theme} setTheme={setTheme} />;
   if (!ready) return <main className="app-shell loading">Preparando o Resenha…</main>;
@@ -899,24 +1020,24 @@ export default function Home() {
       <header className="topbar">
         <button className="brand" onClick={() => setView("setup")} aria-label="Ir para o início"><span className="brand-mark"><Goal size={24} /></span><span><strong>Resenha</strong><small>Times, placar e desempenho</small></span></button>
         <div className="topbar-actions">
-          <div className="app-menu-area" ref={appMenuRef}><button className="menu-trigger" onClick={() => setAppMenuOpen((current) => !current)} aria-expanded={appMenuOpen} aria-haspopup="menu"><Menu size={20} /><span>Menu</span></button>{appMenuOpen && <nav className="app-menu-dropdown" aria-label="Menu principal"><button className={view === "setup" ? "active" : ""} onClick={() => { setView("setup"); setAppMenuOpen(false); }}><Users size={18} /><span><strong>Preparar jogo</strong><small>Presença e divisão dos times</small></span></button><button className={view === "match" ? "active" : ""} disabled={!match} onClick={() => { setView("match"); setAppMenuOpen(false); }}><Activity size={18} /><span><strong>Partida</strong><small>Placar, tempo e súmula</small></span></button><button className={view === "stats" ? "active" : ""} onClick={() => { setView("stats"); setAppMenuOpen(false); }}><BarChart3 size={18} /><span><strong>Estatísticas</strong><small>Rankings e resultados</small></span></button><button className={view === "evolution" ? "active" : ""} onClick={() => { setView("evolution"); setAppMenuOpen(false); }}><TrendingUp size={18} /><span><strong>Evolução</strong><small>Desempenho de cada jogador</small></span></button><button className={view === "training" ? "active" : ""} onClick={() => { setSettingsMessage(""); setView("training"); setAppMenuOpen(false); }}><Dumbbell size={18} /><span><strong>Modo treino</strong><small>Cronograma e preparação física</small></span></button><button className={view === "training-stats" ? "active" : ""} onClick={() => { setView("training-stats"); setAppMenuOpen(false); }}><ClipboardList size={18} /><span><strong>Estatísticas de treino</strong><small>Evolução da preparação pessoal</small></span></button></nav>}</div>
+          <div className="app-menu-area" ref={appMenuRef}><button className="menu-trigger" onClick={() => setAppMenuOpen((current) => !current)} aria-expanded={appMenuOpen} aria-haspopup="menu"><Menu size={20} /><span>Menu</span></button>{appMenuOpen && <nav className="app-menu-dropdown" aria-label="Menu principal"><button className={view === "setup" ? "active" : ""} onClick={() => { setView("setup"); setAppMenuOpen(false); }}><Users size={18} /><span><strong>Preparar jogo</strong><small>Presença e divisão dos times</small></span></button><button className={view === "match" ? "active" : ""} disabled={!match} onClick={() => { setView("match"); setAppMenuOpen(false); }}><Activity size={18} /><span><strong>Partida</strong><small>Placar, tempo e súmula</small></span></button><button className={view === "stats" ? "active" : ""} onClick={() => { setView("stats"); setAppMenuOpen(false); }}><BarChart3 size={18} /><span><strong>Estatísticas</strong><small>Rankings e resultados</small></span></button><button className={view === "evolution" ? "active" : ""} onClick={() => { setView("evolution"); setAppMenuOpen(false); }}><TrendingUp size={18} /><span><strong>Evolução</strong><small>Desempenho de cada jogador</small></span></button><button className={view === "groups" ? "active" : ""} onClick={() => { setView("groups"); setAppMenuOpen(false); }}><Users size={18} /><span><strong>Grupos</strong><small>Convites, presença e permissões</small></span></button><button className={view === "training" ? "active" : ""} onClick={() => { setSettingsMessage(""); setView("training"); setAppMenuOpen(false); }}><Dumbbell size={18} /><span><strong>Modo treino</strong><small>Cronograma e preparação física</small></span></button><button className={view === "training-stats" ? "active" : ""} onClick={() => { setView("training-stats"); setAppMenuOpen(false); }}><ClipboardList size={18} /><span><strong>Estatísticas de treino</strong><small>Evolução da preparação pessoal</small></span></button></nav>}</div>
           <button className="icon-button theme-button" onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")} aria-label={theme === "dark" ? "Ativar modo claro" : "Ativar modo escuro"}>{theme === "dark" ? <Sun size={19} /> : <Moon size={19} />}</button>
           <div className="profile-area" ref={profileMenuRef}>
             <button className="profile-trigger" onClick={() => setProfileMenuOpen((current) => !current)} aria-expanded={profileMenuOpen} aria-haspopup="menu"><ProfileAvatar name={displayName} /><span><strong>{displayName}</strong><small>{session.user.email}</small></span><ChevronDown size={16} /></button>
-            {profileMenuOpen && <div className="profile-dropdown" role="menu"><button onClick={openProfile} role="menuitem"><UserRound size={17} /><span><strong>Meu perfil</strong><small>Nome e foto</small></span></button><button onClick={() => { setProfileMenuOpen(false); setSettingsMessage(""); setView("settings"); }} role="menuitem"><Settings size={17} /><span><strong>Configurações</strong><small>Jogadores e partidas</small></span></button><button onClick={() => { setProfileMenuOpen(false); setSettingsMessage(""); setCurrentPassword(""); setNewPassword(""); setConfirmNewPassword(""); setView("password"); }} role="menuitem"><KeyRound size={17} /><span><strong>Trocar senha</strong><small>Validar senha atual</small></span></button><button className="logout-item" onClick={signOut} role="menuitem"><LogOut size={17} /><span><strong>Sair</strong><small>Encerrar acesso</small></span></button></div>}
+            {profileMenuOpen && <div className="profile-dropdown" role="menu"><button onClick={openProfile} role="menuitem"><UserRound size={17} /><span><strong>Meu perfil</strong><small>Nome e inicial</small></span></button><button onClick={() => { setProfileMenuOpen(false); setSettingsMessage(""); setView("settings"); }} role="menuitem"><Settings size={17} /><span><strong>Configurações</strong><small>Conta e administração</small></span></button><button onClick={() => { setProfileMenuOpen(false); setSettingsMessage(""); setCurrentPassword(""); setNewPassword(""); setConfirmNewPassword(""); setView("password"); }} role="menuitem"><KeyRound size={17} /><span><strong>Trocar senha</strong><small>Validar senha atual</small></span></button><button className="logout-item" onClick={signOut} role="menuitem"><LogOut size={17} /><span><strong>Sair</strong><small>Encerrar acesso</small></span></button></div>}
           </div>
         </div>
       </header>
 
       <div className="page-wrap">
-        {view === "setup" && <section className="view-grid setup-grid">
+        {view === "setup" && <section className={`view-grid setup-grid ${!canScore ? "read-only-view" : ""}`}>
           <div className="main-column">
             <div className="section-heading"><div><span className="eyebrow">PASSO 1</span><h1>Quem vai jogar hoje?</h1></div><span className="count-pill">{data.players.length} cadastrados</span></div>
             <form className="add-player" onSubmit={(event) => { event.preventDefault(); addPlayer(); }}>
-              <div className="field grow"><label htmlFor="player-name">Nome do jogador</label><input ref={nameInput} id="player-name" maxLength="60" value={playerName} onChange={(event) => setPlayerName(event.target.value)} placeholder="Ex.: João" autoComplete="off" /></div>
-              <button className="button primary add-button" type="submit"><UserPlus size={19} /> Adicionar</button>
+              <div className="field grow"><label htmlFor="player-name">Nome do jogador</label><input ref={nameInput} id="player-name" maxLength="60" value={playerName} onChange={(event) => setPlayerName(event.target.value)} placeholder="Ex.: João" autoComplete="off" disabled={!canManage} /></div>
+              <button className="button primary add-button" type="submit" disabled={!canManage}><UserPlus size={19} /> Adicionar</button>
             </form>
-            <div className="attendance-toolbar"><div><Check size={18} /><span><strong>Presença de hoje</strong><small>{presentPlayers.length} de {data.players.length} confirmados</small></span></div><div><button type="button" onClick={() => setAllAttendance(true)}>Todos</button><button type="button" onClick={() => setAllAttendance(false)}>Nenhum</button></div></div>
+            <div className="attendance-toolbar"><div><Check size={18} /><span><strong>Presença de hoje</strong><small>{presentPlayers.length} de {data.players.length} confirmados</small></span></div><div><button type="button" onClick={importLatestAttendance}><RefreshCw size={14} /> Atualizar link</button><button type="button" onClick={() => setAllAttendance(true)}>Todos</button><button type="button" onClick={() => setAllAttendance(false)}>Nenhum</button></div></div>
             <div className="player-list">{data.players.length === 0 ? <Empty icon={<Users size={28} />} title="A lista ainda está vazia" text="Adicione os amigos que vão participar do jogo." /> : visiblePlayers.map((player, index) => {
               const stats = playerStats.get(player.id);
               const present = presentPlayers.some((item) => item.id === player.id);
@@ -932,11 +1053,12 @@ export default function Home() {
             {data.settings.drawMode === "manual" && <div className="manual-teams"><header><strong>Divisão manual</strong><small>Defina o time dos presentes</small></header>{presentPlayers.map((player) => <div className="manual-player" key={player.id}><span>{player.name}</span><div><button type="button" className={manualAssignments[player.id] === 0 ? "blue active" : "blue"} onClick={() => setManualAssignments((current) => ({ ...current, [player.id]: 0 }))}>Azul</button><button type="button" className={manualAssignments[player.id] === 1 ? "orange active" : "orange"} onClick={() => setManualAssignments((current) => ({ ...current, [player.id]: 1 }))}>Laranja</button></div></div>)}</div>}
             <div className="config-summary"><Clock3 size={18} /><span><strong>{data.settings.duration} minutos</strong> · {data.settings.startersPerTeam} titulares por time</span></div>
             <button className="button primary large full" onClick={startMatch} disabled={presentPlayers.length < 2}>{data.settings.drawMode === "manual" ? "Confirmar times e abrir jogo" : "Sortear times e abrir jogo"} <ChevronRight size={20} /></button>{(presentPlayers.length < 2 || setupMessage) && <p className="helper error-helper">{setupMessage || "Marque pelo menos 2 jogadores presentes."}</p>}
-            <section className="last-leaders"><header><span><Trophy size={18} /></span><div><strong>Destaques do último jogo</strong><small>{data.history[0] ? new Date(data.history[0].finishedAt || data.history[0].date).toLocaleDateString("pt-BR") : "Aguardando a primeira partida"}</small></div></header>{lastMatchLeaders.length ? <div>{lastMatchLeaders.map((leader, index) => <div className="last-leader-row" key={leader.id}><b>{index + 1}</b><Avatar name={leader.name} /><span>{leader.name}</span><strong>{leader.points} {scoreWord(data.history[0]?.sport, leader.points)}</strong></div>)}</div> : <p>Encerre uma partida com pontuação para ver o pódio aqui.</p>}</section>
+            {data.history[0] && <div className="last-match-actions"><button className="button secondary" type="button" onClick={repeatLastMatch}><Repeat2 size={17} /> Repetir última configuração</button><button className="button secondary" type="button" onClick={shareLastResult}><Share2 size={17} /> Compartilhar resultado</button></div>}
+            <section className="last-leaders"><header><span><Trophy size={18} /></span><div><strong>Destaques do último jogo</strong><small>{data.history[0] ? new Date(data.history[0].finishedAt || data.history[0].date).toLocaleDateString("pt-BR") : "Aguardando a primeira partida"}</small></div></header>{lastMatchLeaders.length ? <div>{lastMatchLeaders.map((leader, index) => <div className="last-leader-row" key={leader.id}><b>{index + 1}</b><Avatar name={leader.name} /><span>{leader.name}</span><strong>{leader.points} {scoreWord(data.history[0]?.sport, leader.points)}</strong></div>)}</div> : <p>Encerre uma partida com pontuação para ver o pódio aqui.</p>}{achievements.length > 0 && <div className="achievement-list">{achievements.map((item) => <div key={item.title}><span>{item.icon}</span><small>{item.title}</small><strong>{item.name}</strong></div>)}</div>}</section>
           </aside>
         </section>}
 
-        {view === "match" && match && <section className="match-view">
+        {view === "match" && match && <section className={`match-view ${!canScore ? "read-only-view" : ""}`}>
           <div className="scoreboard"><TeamScore team={match.teams[0]} score={match.score[0]} /><div className="timer-panel"><span className={match.running ? "live-label" : "live-label paused"}>{match.running ? "EM JOGO" : match.remainingSeconds === 0 ? "FIM DO TEMPO" : "PAUSADO"}</span><strong className={match.remainingSeconds <= 60 ? "ending" : ""}>{formatTime(match.remainingSeconds)}</strong><div className="timer-actions"><button className="button timer-button" onClick={toggleTimer}>{match.running ? <CirclePause size={19} /> : <CirclePlay size={19} />}{match.running ? "Pausar" : "Iniciar"}</button><button className="icon-button" onClick={resetTimer} aria-label="Reiniciar cronômetro"><RotateCcw size={18} /></button></div></div><TeamScore team={match.teams[1]} score={match.score[1]} /></div>
           <div className="match-grid">
             {match.teams.map((team, teamIndex) => <TeamCard key={team.name} team={team} scoreLabel={scoreAction(match.sport)} onGoal={() => { setGoalTeam(teamIndex); setGoalScorer(""); setGoalAssist(""); }} onSub={() => openSubstitution(teamIndex)} />)}
@@ -956,6 +1078,8 @@ export default function Home() {
           {!evolutionPlayer ? <article className="settings-card"><Empty icon={<TrendingUp size={30} />} title="Nenhum jogador disponível" text="Cadastre jogadores e encerre partidas para acompanhar a evolução." /></article> : <><div className="summary-strip evolution-summary"><Summary icon={<CalendarDays size={20} />} label="Presenças no mês" value={evolutionGames.length} /><Summary icon={<Goal size={20} />} label="Pontuações" value={evolutionPoints} /><Summary icon={<Sparkles size={20} />} label="Assistências" value={evolutionAssists} /><Summary icon={<TrendingUp size={20} />} label="Média por partida" value={evolutionAverage.toFixed(1)} /></div><div className="evolution-grid"><article className="evolution-profile-card"><ProfileAvatar name={evolutionPlayer.name} large /><div><span className="eyebrow">NÍVEL GERAL</span><h2>{evolutionPlayer.name}</h2><Stars rating={playerStats.get(evolutionPlayer.id)?.rating || ratingFromAverage(evolutionAverage, evolutionGames.length)} label="Nível geral do jogador" /><p>{playerStats.get(evolutionPlayer.id)?.label || ratingLabel(ratingFromAverage(evolutionAverage, evolutionGames.length))}</p></div></article><article className="evolution-chart-card"><header><div><span className="eyebrow">POR PARTIDA</span><h2>Produção no mês</h2></div></header>{evolutionGames.length === 0 ? <Empty icon={<BarChart3 size={28} />} title="Sem partidas neste mês" text="As presenças e o desempenho aparecerão depois de uma partida salva." /> : <div className="evolution-game-list">{evolutionGames.map(({ game, points, assists, rating }) => <div className="evolution-game-row" key={game.id}><div><strong>{new Date(game.finishedAt || game.date).toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}</strong><small>{canonicalSport(game.sport)}</small></div><div className="performance-bars"><span style={{ "--bar": `${Math.min(100, points * 20)}%` }}><i />{points} {scoreWord(game.sport, points)}</span>{sportKind(game.sport) === "football" && <span className="assist-bar" style={{ "--bar": `${Math.min(100, assists * 25)}%` }}><i />{assists} assist.</span>}</div><Stars rating={rating} label={`Nível da partida: ${rating} estrelas`} /></div>)}</div>}</article></div></>}
         </section>}
 
+        {view === "groups" && activeGroup && <Suspense fallback={<section className="settings-card">Carregando grupos…</section>}><GroupHub groups={groups} activeGroup={activeGroup} players={data.players} session={session} onReload={reloadGroups} onSwitch={switchGroup} /></Suspense>}
+
         {view === "training" && <section className="training-view">
           <div className="section-heading settings-heading"><div><span className="eyebrow">PREPARAÇÃO FÍSICA</span><h1>Modo treino</h1><p>Monte rotinas por tempo ou repetições, organize os dias e registre o que foi concluído.</p></div><Dumbbell size={29} /></div>
           {settingsMessage && <p className="settings-message" role="status">{settingsMessage}</p>}
@@ -970,13 +1094,14 @@ export default function Home() {
 
         {view === "password" && <section className="password-page"><button className="recovery-back" type="button" onClick={() => setView("setup")}><ArrowLeft size={17} /> Voltar</button><article className="settings-card password-change-card"><span className="auth-lock"><KeyRound size={23} /></span><h1>Trocar senha</h1><p>Confirme a senha atual e informe a nova senha duas vezes.</p>{settingsMessage && <p className="settings-message" role="status">{settingsMessage}</p>}<form onSubmit={changeLoggedPassword}><div className="field"><label htmlFor="current-password">Senha atual</label><input id="current-password" type="password" required autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} /></div><div className="field"><label htmlFor="new-logged-password">Nova senha</label><input id="new-logged-password" type="password" minLength="6" required autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></div><div className="field"><label htmlFor="confirm-logged-password">Repita a nova senha</label><input id="confirm-logged-password" type="password" minLength="6" required autoComplete="new-password" value={confirmNewPassword} onChange={(event) => setConfirmNewPassword(event.target.value)} /></div><button className="button primary large full" disabled={authBusy}><Save size={18} /> {authBusy ? "Validando..." : "Confirmar troca de senha"}</button></form></article></section>}
 
-        {view === "settings" && <section className="settings-view">
+        {view === "settings" && <section className={`settings-view ${!canManage ? "viewer-settings" : ""}`}>
           <div className="section-heading settings-heading"><div><span className="eyebrow">ADMINISTRAÇÃO</span><h1>Configurações</h1><p>Gerencie a conta, os jogadores do ranking e o histórico de partidas.</p></div><Settings size={28} /></div>
           {settingsMessage && <p className="settings-message" role="status">{settingsMessage}</p>}
           <article className="settings-card account-settings compact-account"><header><span><UserRound size={20} /></span><div><h2>Perfil da conta</h2><p>Nome exibido no aplicativo.</p></div></header><div className="settings-profile"><ProfileAvatar name={displayName} large /><div><strong>{displayName}</strong><small>{session.user.email}</small></div><button className="button secondary" onClick={openProfile}><Pencil size={17} /> Editar perfil</button></div></article>
           <article className="settings-card cloud-settings-card"><header><span><Cloud size={20} /></span><div><h2>Sincronização e backup</h2><p>Controle a cópia protegida da conta e faça backups quando precisar.</p></div><b className={`sync-badge ${syncStatus}`}>{syncLabel}</b></header><div className="account-line"><span><Cloud size={20} /><span><small>Conta conectada</small><strong>{session.user.email}</strong></span></span></div>{authMessage && <p className="cloud-message" role="status">{authMessage}</p>}<div className="cloud-settings-actions"><button className="button secondary" onClick={syncNow} disabled={syncStatus === "syncing" || syncStatus === "loading"}><RefreshCw size={18} /> Sincronizar agora</button><button className="button secondary" onClick={exportBackup}><Download size={17} /> Exportar backup</button><button className="button secondary" onClick={() => importInput.current?.click()}><Upload size={17} /> Importar backup</button><input ref={importInput} type="file" accept="application/json,.json" onChange={importBackup} hidden /></div><small className="security-note"><Shield size={15} /> Cada usuário acessa somente os próprios dados. Backups importados são validados e limitados a 2 MB.</small></article>
           <article className="settings-card manage-card"><header><span><Users size={20} /></span><div><h2>Jogadores e ranking</h2><p>Alterar um nome atualiza o cadastro, as escalações e a artilharia. Excluir também remove as pontuações do histórico.</p></div><b>{managedPlayers.length}</b></header>{managedPlayers.length === 0 ? <Empty icon={<Users size={27} />} title="Nenhum jogador cadastrado" text="Os jogadores adicionados aparecerão aqui." /> : <div className="manage-list">{managedPlayers.map((player) => <div className="manage-row" key={player.id}><Avatar name={player.name} />{editingPlayer?.id === player.id ? <input autoFocus maxLength="60" value={editingPlayer.name} onChange={(event) => setEditingPlayer({ ...editingPlayer, name: event.target.value })} onKeyDown={(event) => { if (event.key === "Enter") savePlayerName(); if (event.key === "Escape") setEditingPlayer(null); }} aria-label={`Novo nome de ${player.name}`} /> : <div><strong>{player.name}</strong><small>{player.totalPoints} pontos · {player.totalAssists} assistências{player.registered ? ` · nível ${playerStats.get(player.id)?.rating || 1}★` : " · somente no ranking"}</small></div>}<div className="manage-actions">{editingPlayer?.id === player.id ? <><button className="icon-button save-action" onClick={savePlayerName} aria-label="Salvar nome"><Check size={17} /></button><button className="icon-button" onClick={() => setEditingPlayer(null)} aria-label="Cancelar edição"><X size={17} /></button></> : <button className="icon-button" onClick={() => { setEditingPlayer({ id: player.id, name: player.name }); setSettingsMessage(""); }} aria-label={`Editar ${player.name}`}><Pencil size={16} /></button>}<button className="icon-button danger" onClick={() => deletePlayerEverywhere(player)} aria-label={`Excluir ${player.name}`}><Trash2 size={17} /></button></div></div>)}</div>}</article>
           <article className="settings-card manage-card"><header><span><CalendarDays size={20} /></span><div><h2>Histórico de partidas</h2><p>Edite informações do jogo ou exclua uma partida e suas pontuações.</p></div><b>{data.history.length}</b></header>{data.history.length === 0 ? <Empty icon={<CalendarDays size={27} />} title="Nenhuma partida salva" text="As partidas encerradas aparecerão aqui." /> : <div className="manage-list match-manage-list">{data.history.map((game) => <div className="manage-row match-manage-row" key={game.id}><span className="match-date-badge">{new Date(game.finishedAt || game.date).toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}</span><div><strong>{game.sport}</strong><small>{game.teams?.[0]?.short || "Time 1"} {game.score?.[0] || 0} × {game.score?.[1] || 0} {game.teams?.[1]?.short || "Time 2"} · {(game.events || []).filter((event) => event.type === "goal").length} pontuações registradas</small></div><div className="manage-actions"><button className="icon-button" onClick={() => openMatchEditor(game)} aria-label="Editar partida"><Pencil size={16} /></button><button className="icon-button danger" onClick={() => deleteMatch(game)} aria-label="Excluir partida"><Trash2 size={17} /></button></div></div>)}</div>}</article>
+          <article className="settings-card reminder-card"><header><span><Bell size={20} /></span><div><h2>Lembrete da próxima resenha</h2><p>Receba uma notificação neste aparelho enquanto o aplicativo estiver instalado ou aberto.</p></div></header><div className="reminder-controls"><input type="datetime-local" value={reminderAt} onChange={(event) => { setReminderAt(event.target.value); localStorage.setItem("resenha-reminder-at", event.target.value); }} /><button className="button secondary" onClick={async () => { if (!("Notification" in window)) { setSettingsMessage("Este navegador não oferece notificações."); return; } const result = await Notification.requestPermission(); setSettingsMessage(result === "granted" ? "Notificações autorizadas." : "Permissão de notificação não concedida."); }}><Bell size={17} /> Autorizar</button>{installPrompt && <button className="button primary" onClick={async () => { await installPrompt.prompt(); setInstallPrompt(null); }}><Download size={17} /> Instalar app</button>}</div></article>
           <button className="button logout-button" onClick={signOut}><LogOut size={18} /> Sair da conta</button>
         </section>}
       </div>

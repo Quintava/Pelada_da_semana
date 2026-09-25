@@ -77,7 +77,7 @@ Ao atualizar uma instalação existente, execute novamente todo o conteúdo de `
 
 ## Publicação após renomear o repositório
 
-O projeto está configurado para o repositório `resenha`, portanto o endereço esperado é `https://quintava.github.io/resenha/`. Em **Settings > Pages**, deixe **Source: GitHub Actions**. No Supabase, atualize **Authentication > URL Configuration** para o novo endereço e remova a URL antiga apenas depois de confirmar que o login e a recuperação de senha funcionam.
+O projeto está configurado para o repositório `Resenha`, portanto o endereço esperado é `https://quintava.github.io/Resenha/`. A letra maiúscula do nome precisa ser preservada nos caminhos. Em **Settings > Pages**, deixe **Source: GitHub Actions**. No Supabase, atualize **Authentication > URL Configuration** para o novo endereço e remova a URL antiga apenas depois de confirmar que o login e a recuperação de senha funcionam.
 
 ## Sugestões automáticas por esporte
 

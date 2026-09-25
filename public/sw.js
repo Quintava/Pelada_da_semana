@@ -1,5 +1,5 @@
-const CACHE = "resenha-v2";
-const BASE = "/resenha/";
+const CACHE = "resenha-v2.0.1";
+const BASE = "/Resenha/";
 const CORE = [BASE, `${BASE}index.html`, `${BASE}manifest.webmanifest`, `${BASE}favicon.svg`, `${BASE}icons/icon-192.png`, `${BASE}icons/icon-512.png`];
 
 self.addEventListener("install", (event) => {

@@ -3,6 +3,6 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
-  base: "/resenha/",
+  base: "/Resenha/",
   server: { port: 5173, open: true },
 });

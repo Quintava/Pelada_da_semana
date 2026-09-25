@@ -57,9 +57,9 @@ Nunca copie a **Secret key**, a chave `service_role` ou qualquer chave que comec
 ## 4. Configurar os endereços de login e recuperação de senha
 
 1. No Supabase, abra **Authentication > URL Configuration**.
-2. Em **Site URL**, informe `https://quintava.github.io/resenha/`.
-3. Em **Redirect URLs**, adicione também `https://quintava.github.io/resenha/`. Esse endereço é usado tanto na confirmação do cadastro quanto no botão **Esqueci minha senha**.
-4. Para testar no computador, adicione `http://localhost:5173/resenha/` nas URLs permitidas.
+2. Em **Site URL**, informe `https://quintava.github.io/Resenha/`.
+3. Em **Redirect URLs**, adicione também `https://quintava.github.io/Resenha/`. Esse endereço é usado tanto na confirmação do cadastro quanto no botão **Esqueci minha senha**.
+4. Para testar no computador, adicione `http://localhost:5173/Resenha/` nas URLs permitidas.
 
 ## 5. Testar no computador
 
@@ -88,11 +88,11 @@ Depois faça um novo commit ou execute novamente o workflow em **Actions**.
 
 ## 7. Depois de renomear o repositório
 
-1. Confirme que `vite.config.js` contém `base: "/resenha/"`.
+1. Confirme que `vite.config.js` contém `base: "/Resenha/"`.
 2. No GitHub, abra **Settings > Pages** e selecione **GitHub Actions** como origem.
 3. Em **Actions**, execute novamente **Publicar no GitHub Pages**.
 4. Os secrets continuam os mesmos e não precisam ser recriados.
-5. O endereço final será `https://quintava.github.io/resenha/`.
+5. O endereço final será `https://quintava.github.io/Resenha/`.
 
 ## 8. Contas, grupos e dados
 

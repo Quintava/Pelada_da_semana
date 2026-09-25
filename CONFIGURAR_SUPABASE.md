@@ -1,6 +1,6 @@
 # Configurar o salvamento na nuvem
 
-Sem esta configuração, o site continua funcionando e salvando no navegador. Para sincronizar entre celulares, faça os passos abaixo.
+Esta configuração é necessária para liberar a tela de login e manter os dados de cada conta separados. Faça os passos abaixo.
 
 ## 1. Criar o projeto
 
@@ -9,21 +9,57 @@ Sem esta configuração, o site continua funcionando e salvando no navegador. Pa
 3. No painel do projeto, abra **SQL Editor**.
 4. Copie todo o conteúdo de `supabase/schema.sql`, cole no editor e clique em **Run**.
 
-## 2. Obter as informações públicas
+## 2. Localizar a URL do projeto
 
-1. No Supabase, abra o painel **Connect** do projeto.
-2. Copie a **Project URL**.
-3. Copie a **Publishable key**. Em projetos antigos, ela pode aparecer como chave `anon`.
-4. Nunca use nem publique a chave `service_role`.
+Na interface atual do Supabase, a URL pode não aparecer diretamente na tela inicial.
 
-## 3. Configurar o endereço de login
+1. Entre no projeto correto no painel do Supabase.
+2. No menu lateral esquerdo, abra **Integrations**.
+3. Selecione **Data API**.
+4. Procure a seção **Project URL** ou **API URL**.
+5. Copie o endereço completo. Ele será parecido com:
+
+```text
+https://abcdefghijk.supabase.co
+```
+
+Esse endereço será usado no GitHub como:
+
+```text
+VITE_SUPABASE_URL
+```
+
+Também é possível identificar a URL pelo código do projeto: se o endereço do painel contém `/project/abcdefghijk`, normalmente a URL será `https://abcdefghijk.supabase.co`.
+
+## 3. Localizar a chave pública
+
+1. No menu lateral, abra **Settings**.
+2. Entre em **API Keys**. Não procure por uma página chamada apenas **API**, pois ela não existe mais na interface atual.
+3. Na seção de chaves, localize **Publishable key**.
+4. Copie a chave que começa normalmente com:
+
+```text
+sb_publishable_
+```
+
+5. Essa chave será usada no GitHub como:
+
+```text
+VITE_SUPABASE_PUBLISHABLE_KEY
+```
+
+Se o projeto for antigo e não tiver uma chave `sb_publishable_`, a chave legada **anon** também funciona. Ela normalmente é uma chave longa que começa com `eyJ`.
+
+Nunca copie a **Secret key**, a chave `service_role` ou qualquer chave que comece com `sb_secret_`. Essas chaves possuem acesso administrativo e não podem ser colocadas no site.
+
+## 4. Configurar os endereços de login e recuperação de senha
 
 1. No Supabase, abra **Authentication > URL Configuration**.
 2. Em **Site URL**, informe `https://quintava.github.io/Pelada_da_semana/`.
-3. Em **Redirect URLs**, adicione também `https://quintava.github.io/Pelada_da_semana/`.
+3. Em **Redirect URLs**, adicione também `https://quintava.github.io/Pelada_da_semana/`. Esse endereço é usado tanto na confirmação do cadastro quanto no botão **Esqueci minha senha**.
 4. Para testar no computador, adicione `http://localhost:5173/Pelada_da_semana/` nas URLs permitidas.
 
-## 4. Testar no computador
+## 5. Testar no computador
 
 Crie um arquivo chamado `.env.local` na raiz do projeto:
 
@@ -39,7 +75,7 @@ npm install
 npm run dev
 ```
 
-## 5. Configurar no GitHub Pages
+## 6. Configurar no GitHub Pages
 
 No repositório do GitHub, acesse **Settings > Secrets and variables > Actions** e crie dois **Repository secrets**:
 
@@ -48,6 +84,6 @@ No repositório do GitHub, acesse **Settings > Secrets and variables > Actions**
 
 Depois faça um novo commit ou execute novamente o workflow em **Actions**.
 
-## 6. Contas e dados separados
+## 7. Contas e dados separados
 
 O aplicativo só abre depois do login. Cada conta possui jogadores, partidas e artilharia próprios. Para acessar o mesmo grupo em outro celular, entre com a mesma conta. Cada alteração também fica salva localmente de forma separada por usuário e é sincronizada automaticamente quando houver internet.

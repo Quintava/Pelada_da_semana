@@ -1,6 +1,6 @@
 {
-  "name": "pelada-da-semana",
-  "version": "1.0.0",
+  "name": "resenha",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,7 +9,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@supabase/ssr": "^0.12.7",
     "@supabase/supabase-js": "^2.116.0",
     "lucide-react": "1.31.0",
     "react": "19.2.6",

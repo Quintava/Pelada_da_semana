@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, ArrowDownUp, BarChart3, CalendarDays, Check, ChevronRight, CirclePause, CirclePlay, Clock3, Cloud, CloudOff, Download, Eye, EyeOff, Goal, LockKeyhole, LogOut, Mail, Medal, Moon, Plus, RefreshCw, RotateCcw, Shield, ShieldCheck, Sparkles, Sun, Trash2, Trophy, Upload, UserPlus, Users, X } from "lucide-react";
+import { Activity, ArrowDownUp, ArrowLeft, BarChart3, CalendarDays, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, CirclePause, CirclePlay, ClipboardList, Clock3, Cloud, CloudOff, Download, Dumbbell, Eye, EyeOff, Goal, KeyRound, LockKeyhole, LogOut, Mail, Medal, Menu, Moon, Pencil, Plus, RefreshCw, RotateCcw, Save, Settings, Shield, Sparkles, Sun, Trash2, TrendingUp, Trophy, Upload, UserPlus, UserRound, Users, X } from "lucide-react";
 import { supabase, supabaseConfigured } from "./supabase";
 
 const LEGACY_STORAGE_KEY = "pelada-da-semana-v4";
@@ -13,12 +13,117 @@ const TEAM_META = [
   { name: "Time Laranja", short: "LRJ", color: "orange" },
 ];
 const startersBySport = { Futebol: 11, Futsal: 5, Vôlei: 6, Basquete: 5, Handebol: 7 };
-const initialState = { players: [], settings: { sport: "Futsal", duration: 20, startersPerTeam: 5, drawMode: "balanced" }, activeMatch: null, history: [] };
+const initialState = { profile: { displayName: "", avatar: "" }, players: [], settings: { sport: "Futsal", duration: 20, startersPerTeam: 5, drawMode: "balanced", attendanceIds: [] }, activeMatch: null, history: [], trainingPlans: [], trainingHistory: [], activeTraining: null };
 const uid = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const thisMonth = () => new Date().toLocaleDateString("sv-SE").slice(0, 7);
 const monthKey = (date) => new Date(date).toLocaleDateString("sv-SE").slice(0, 7);
 const formatTime = (seconds) => `${String(Math.floor(Math.max(0, seconds) / 60)).padStart(2, "0")}:${String(Math.max(0, seconds) % 60).padStart(2, "0")}`;
 const minuteOf = (match) => Math.max(1, Math.ceil((match.durationSeconds - match.remainingSeconds) / 60));
+const PLAYER_PAGE_SIZE = 10;
+const TRAINING_DAYS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+const scoreWord = (sport, amount = 2) => ["Basquete", "Vôlei"].includes(sport) ? (amount === 1 ? "ponto" : "pontos") : (amount === 1 ? "gol" : "gols");
+
+function optimizeProfileImage(file) {
+  const MAX_INPUT_SIZE = 3 * 1024 * 1024;
+  const MAX_OUTPUT_SIZE = 350 * 1024;
+  if (!file?.type.startsWith("image/")) return Promise.reject(new Error("Selecione uma imagem JPG, PNG ou WebP."));
+  if (file.size > MAX_INPUT_SIZE) return Promise.reject(new Error("A imagem original deve ter no máximo 3 MB."));
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Não foi possível ler a imagem."));
+    reader.onload = () => {
+      const image = new Image();
+      image.onerror = () => reject(new Error("O arquivo de imagem não é válido."));
+      image.onload = () => {
+        const size = Math.min(image.naturalWidth, image.naturalHeight);
+        const canvas = document.createElement("canvas");
+        canvas.width = 512;
+        canvas.height = 512;
+        const context = canvas.getContext("2d");
+        const sourceX = (image.naturalWidth - size) / 2;
+        const sourceY = (image.naturalHeight - size) / 2;
+        context.drawImage(image, sourceX, sourceY, size, size, 0, 0, 512, 512);
+        let quality = 0.82;
+        let output = canvas.toDataURL("image/jpeg", quality);
+        while (Math.ceil(output.length * 0.75) > MAX_OUTPUT_SIZE && quality > 0.42) {
+          quality -= 0.08;
+          output = canvas.toDataURL("image/jpeg", quality);
+        }
+        if (Math.ceil(output.length * 0.75) > MAX_OUTPUT_SIZE) reject(new Error("Não foi possível reduzir a imagem para o limite de 350 KB."));
+        else resolve(output);
+      };
+      image.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function ratingFromAverage(average, matches) {
+  if (!matches || average < 0.25) return 1;
+  if (average < 0.75) return 2;
+  if (average < 1.25) return 3;
+  if (average < 2) return 4;
+  return 5;
+}
+
+function ratingFromMatch(points) {
+  if (points <= 0) return 1;
+  return Math.min(5, points + 1);
+}
+
+const ratingLabel = (rating) => ["", "Em evolução", "Regular", "Destaque", "Craque", "Elite"][rating];
+
+function playerWasInMatch(match, playerId) {
+  return match.teams?.some((team) => [...(team.starters || []), ...(team.bench || [])].some((player) => player.id === playerId));
+}
+
+function pointsInMatch(match, playerId) {
+  return (match.events || []).filter((event) => event.type === "goal" && event.playerId === playerId).length;
+}
+
+function buildPlayerStats(players, history) {
+  const lastMatch = history[0] || null;
+  return new Map(players.map((player) => {
+    const matches = history.filter((match) => playerWasInMatch(match, player.id));
+    const totalPoints = matches.reduce((sum, match) => sum + pointsInMatch(match, player.id), 0);
+    const average = matches.length ? totalPoints / matches.length : 0;
+    const lastPoints = lastMatch && playerWasInMatch(lastMatch, player.id) ? pointsInMatch(lastMatch, player.id) : null;
+    const rating = ratingFromAverage(average, matches.length);
+    return [player.id, { matches: matches.length, totalPoints, average, lastPoints, lastRating: lastPoints === null ? null : ratingFromMatch(lastPoints), rating, label: ratingLabel(rating) }];
+  }));
+}
+
+function renamePlayerInMatch(match, playerId, oldName, newName) {
+  if (!match) return match;
+  const teams = (match.teams || []).map((team) => ({
+    ...team,
+    starters: (team.starters || []).map((player) => player.id === playerId ? { ...player, name: newName } : player),
+    bench: (team.bench || []).map((player) => player.id === playerId ? { ...player, name: newName } : player),
+  }));
+  const events = (match.events || []).map((event) => {
+    if (event.type === "goal" && event.playerId === playerId) return { ...event, playerName: newName };
+    if (event.type === "goal" && event.assistPlayerId === playerId) return { ...event, assistPlayerName: newName };
+    if (event.type === "sub") return { ...event, playerOut: event.playerOut === oldName ? newName : event.playerOut, playerIn: event.playerIn === oldName ? newName : event.playerIn };
+    return event;
+  });
+  return { ...match, teams, events };
+}
+
+function removePlayerFromMatch(match, playerId) {
+  if (!match) return match;
+  const removedGoals = [0, 0];
+  const events = (match.events || []).map((event) => {
+    if (event.type === "goal" && event.playerId === playerId) {
+      removedGoals[event.teamIndex] += 1;
+      return null;
+    }
+    if (event.type === "goal" && event.assistPlayerId === playerId) return { ...event, assistPlayerId: null, assistPlayerName: null };
+    return event;
+  }).filter(Boolean);
+  const teams = (match.teams || []).map((team) => ({ ...team, starters: (team.starters || []).filter((player) => player.id !== playerId), bench: (team.bench || []).filter((player) => player.id !== playerId) }));
+  const score = (match.score || [0, 0]).map((value, index) => Math.max(0, value - removedGoals[index]));
+  return { ...match, teams, events, score };
+}
 
 function readSaved(key) {
   if (typeof window === "undefined") return initialState;
@@ -31,7 +136,7 @@ function readSaved(key) {
 }
 
 const userStorageKey = (userId) => `${USER_STORAGE_PREFIX}:${userId}`;
-const hasSavedContent = (saved) => saved.players.length > 0 || saved.history.length > 0 || Boolean(saved.activeMatch);
+const hasSavedContent = (saved) => saved.players.length > 0 || saved.history.length > 0 || Boolean(saved.activeMatch) || (saved.trainingPlans || []).length > 0 || (saved.trainingHistory || []).length > 0 || Boolean(saved.activeTraining);
 
 function shuffle(items) {
   const copy = [...items];
@@ -44,14 +149,26 @@ function shuffle(items) {
 
 function drawTeams(players, mode, startersPerTeam) {
   let ordered = shuffle(players);
-  if (mode === "balanced") ordered = ordered.sort((a, b) => b.level - a.level);
+  if (mode === "balanced") ordered = ordered.sort((a, b) => b.rating - a.rating);
   const teams = TEAM_META.map((meta) => ({ ...meta, starters: [], bench: [] }));
   ordered.forEach((player, index) => {
     let target = index % 2;
     if (mode === "balanced") {
-      const totals = teams.map((team) => [...team.starters, ...team.bench].reduce((sum, item) => sum + item.level, 0));
-      target = totals[0] <= totals[1] ? 0 : 1;
+      const counts = teams.map((team) => team.starters.length + team.bench.length);
+      const totals = teams.map((team) => [...team.starters, ...team.bench].reduce((sum, item) => sum + item.rating, 0));
+      target = counts[0] === counts[1] ? (totals[0] <= totals[1] ? 0 : 1) : (counts[0] < counts[1] ? 0 : 1);
     }
+    const list = teams[target].starters.length < startersPerTeam ? "starters" : "bench";
+    teams[target][list].push(player);
+  });
+  return teams;
+}
+
+function buildManualTeams(players, assignments, startersPerTeam) {
+  const teams = TEAM_META.map((meta) => ({ ...meta, starters: [], bench: [] }));
+  players.forEach((player) => {
+    const target = assignments[player.id];
+    if (target !== 0 && target !== 1) return;
     const list = teams[target].starters.length < startersPerTeam ? "starters" : "bench";
     teams[target][list].push(player);
   });
@@ -63,8 +180,10 @@ export default function Home() {
   const [ready, setReady] = useState(false);
   const [view, setView] = useState("setup");
   const [playerName, setPlayerName] = useState("");
-  const [playerLevel, setPlayerLevel] = useState(3);
+  const [playerPage, setPlayerPage] = useState(1);
   const [goalTeam, setGoalTeam] = useState(null);
+  const [goalScorer, setGoalScorer] = useState("");
+  const [goalAssist, setGoalAssist] = useState("");
   const [subTeam, setSubTeam] = useState(null);
   const [selectedOut, setSelectedOut] = useState("");
   const [selectedIn, setSelectedIn] = useState("");
@@ -73,19 +192,105 @@ export default function Home() {
   const [session, setSession] = useState(null);
   const [authReady, setAuthReady] = useState(false);
   const [cloudOpen, setCloudOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [appMenuOpen, setAppMenuOpen] = useState(false);
+  const [profileName, setProfileName] = useState("");
+  const [profileAvatar, setProfileAvatar] = useState("");
+  const [profileMessage, setProfileMessage] = useState("");
+  const [editingPlayer, setEditingPlayer] = useState(null);
+  const [editingMatch, setEditingMatch] = useState(null);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [settingsMessage, setSettingsMessage] = useState("");
+  const [setupMessage, setSetupMessage] = useState("");
+  const [manualAssignments, setManualAssignments] = useState({});
+  const [evolutionPlayerId, setEvolutionPlayerId] = useState("");
+  const [evolutionMonth, setEvolutionMonth] = useState(thisMonth());
+  const [trainingName, setTrainingName] = useState("");
+  const [trainingDays, setTrainingDays] = useState([]);
+  const [trainingExercises, setTrainingExercises] = useState([]);
+  const [exerciseDraft, setExerciseDraft] = useState({ name: "", mode: "time", target: 30 });
   const [authMode, setAuthMode] = useState("signin");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [passwordRecovery, setPasswordRecovery] = useState(false);
+  const [recoveryPassword, setRecoveryPassword] = useState("");
+  const [recoveryConfirm, setRecoveryConfirm] = useState("");
   const [authMessage, setAuthMessage] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
   const [syncStatus, setSyncStatus] = useState(supabaseConfigured ? "offline" : "local");
   const nameInput = useRef(null);
   const importInput = useRef(null);
+  const profileInput = useRef(null);
+  const profileMenuRef = useRef(null);
+  const appMenuRef = useRef(null);
   const dataRef = useRef(initialState);
   const dirtyRef = useRef(false);
   const syncingRef = useRef(false);
   const cloudLoadedUser = useRef(null);
+  const playerStats = useMemo(() => buildPlayerStats(data.players, data.history), [data.players, data.history]);
+  const managedPlayers = useMemo(() => {
+    const players = new Map(data.players.map((player) => [player.id, { ...player, registered: true, totalPoints: 0, totalAssists: 0 }]));
+    data.history.forEach((game) => (game.events || []).filter((event) => event.type === "goal").forEach((event) => {
+      const current = players.get(event.playerId) || { id: event.playerId, name: event.playerName, registered: false, totalPoints: 0, totalAssists: 0 };
+      players.set(event.playerId, { ...current, totalPoints: current.totalPoints + 1 });
+      if (event.assistPlayerId) {
+        const assistant = players.get(event.assistPlayerId) || { id: event.assistPlayerId, name: event.assistPlayerName, registered: false, totalPoints: 0, totalAssists: 0 };
+        players.set(event.assistPlayerId, { ...assistant, totalAssists: assistant.totalAssists + 1 });
+      }
+    }));
+    return [...players.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }, [data.players, data.history]);
+  const playerPageCount = Math.max(1, Math.ceil(data.players.length / PLAYER_PAGE_SIZE));
+  const visiblePlayers = useMemo(() => data.players.slice((playerPage - 1) * PLAYER_PAGE_SIZE, playerPage * PLAYER_PAGE_SIZE), [data.players, playerPage]);
+  const lastMatchLeaders = useMemo(() => {
+    const match = data.history[0];
+    if (!match) return [];
+    const totals = new Map();
+    (match.events || []).filter((event) => event.type === "goal").forEach((event) => totals.set(event.playerId, { id: event.playerId, name: event.playerName, points: (totals.get(event.playerId)?.points || 0) + 1 }));
+    return [...totals.values()].sort((a, b) => b.points - a.points || a.name.localeCompare(b.name)).slice(0, 3);
+  }, [data.history]);
+  const displayName = data.profile?.displayName?.trim() || session?.user?.user_metadata?.display_name || session?.user?.email?.split("@")[0] || "Usuário";
+  const attendanceConfigured = Array.isArray(data.settings.attendanceIds);
+  const presentPlayers = useMemo(() => data.players.filter((player) => !attendanceConfigured || data.settings.attendanceIds.includes(player.id)), [data.players, data.settings.attendanceIds, attendanceConfigured]);
+  const evolutionPlayer = managedPlayers.find((player) => player.id === evolutionPlayerId) || managedPlayers[0] || null;
+  const evolutionGames = useMemo(() => {
+    if (!evolutionPlayer) return [];
+    return data.history.filter((game) => monthKey(game.finishedAt || game.date) === evolutionMonth && playerWasInMatch(game, evolutionPlayer.id)).map((game) => {
+      const points = pointsInMatch(game, evolutionPlayer.id);
+      const assists = (game.events || []).filter((event) => event.type === "goal" && event.assistPlayerId === evolutionPlayer.id).length;
+      return { game, points, assists, rating: ratingFromMatch(points) };
+    });
+  }, [data.history, evolutionMonth, evolutionPlayer]);
+  const evolutionPoints = evolutionGames.reduce((sum, item) => sum + item.points, 0);
+  const evolutionAssists = evolutionGames.reduce((sum, item) => sum + item.assists, 0);
+  const evolutionAverage = evolutionGames.length ? evolutionPoints / evolutionGames.length : 0;
+
+  useEffect(() => {
+    const closeMenu = (event) => {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(event.target)) setProfileMenuOpen(false);
+      if (appMenuRef.current && !appMenuRef.current.contains(event.target)) setAppMenuOpen(false);
+    };
+    const closeOnEscape = (event) => { if (event.key === "Escape") { setProfileMenuOpen(false); setAppMenuOpen(false); } };
+    document.addEventListener("mousedown", closeMenu);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeMenu);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!evolutionPlayerId && managedPlayers[0]) setEvolutionPlayerId(managedPlayers[0].id);
+    else if (evolutionPlayerId && !managedPlayers.some((player) => player.id === evolutionPlayerId)) setEvolutionPlayerId(managedPlayers[0]?.id || "");
+  }, [evolutionPlayerId, managedPlayers]);
+
+  useEffect(() => {
+    if (playerPage > playerPageCount) setPlayerPage(playerPageCount);
+  }, [playerPage, playerPageCount]);
 
   useEffect(() => {
     if (ready && session?.user) {
@@ -109,7 +314,11 @@ export default function Home() {
       setSession(authData.session);
       setAuthReady(true);
     });
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      if (event === "PASSWORD_RECOVERY") {
+        setPasswordRecovery(true);
+        setAuthMessage("");
+      }
       setSession(nextSession);
       setAuthReady(true);
     });
@@ -209,41 +418,60 @@ export default function Home() {
     return () => window.clearInterval(timer);
   }, [data.activeMatch?.running]);
 
-  const addPlayer = useCallback((rawName = playerName, rawLevel = playerLevel) => {
+  useEffect(() => {
+    if (!data.activeTraining?.running || data.activeTraining.remainingSeconds <= 0) return;
+    const timer = window.setInterval(() => {
+      setData((current) => {
+        if (!current.activeTraining?.running) return current;
+        const next = Math.max(0, current.activeTraining.remainingSeconds - 1);
+        return { ...current, activeTraining: { ...current.activeTraining, remainingSeconds: next, running: next > 0 } };
+      });
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [data.activeTraining?.running]);
+
+  const addPlayer = useCallback((rawName = playerName) => {
     const name = String(rawName).trim();
-    const level = Math.max(1, Math.min(5, Number(rawLevel) || 3));
     if (!name) return { ok: false, error: "Informe o nome do jogador." };
     if (data.players.some((player) => player.name.toLowerCase() === name.toLowerCase())) return { ok: false, error: "Este jogador já está na lista." };
-    const player = { id: uid(), name, level };
-    setData((current) => ({ ...current, players: [...current.players, player] }));
+    const player = { id: uid(), name };
+    setData((current) => ({ ...current, players: [...current.players, player], settings: { ...current.settings, attendanceIds: Array.isArray(current.settings.attendanceIds) ? [...current.settings.attendanceIds, player.id] : current.settings.attendanceIds } }));
+    setPlayerPage(Math.ceil((data.players.length + 1) / PLAYER_PAGE_SIZE));
     setPlayerName("");
-    setPlayerLevel(3);
     nameInput.current?.focus();
     return { ok: true, player };
-  }, [data.players, playerLevel, playerName]);
+  }, [data.players, playerName]);
 
   const startMatch = useCallback(() => {
-    if (data.players.length < 2) return { ok: false, error: "Cadastre pelo menos 2 jogadores." };
+    setSetupMessage("");
+    if (presentPlayers.length < 2) { setSetupMessage("Marque pelo menos 2 jogadores presentes."); return { ok: false, error: "Marque pelo menos 2 jogadores presentes." }; }
     const durationSeconds = data.settings.duration * 60;
-    const match = { id: uid(), date: new Date().toISOString(), sport: data.settings.sport, durationSeconds, remainingSeconds: durationSeconds, running: false, teams: drawTeams(data.players, data.settings.drawMode, data.settings.startersPerTeam), score: [0, 0], events: [] };
+    const ratedPlayers = presentPlayers.map((player) => ({ ...player, rating: playerStats.get(player.id)?.rating || 1 }));
+    if (data.settings.drawMode === "manual" && ratedPlayers.some((player) => manualAssignments[player.id] !== 0 && manualAssignments[player.id] !== 1)) { setSetupMessage("Escolha o time de todos os jogadores presentes."); return { ok: false, error: "Escolha um time para todos os jogadores presentes." }; }
+    if (data.settings.drawMode === "manual" && (![0, 1].every((teamIndex) => ratedPlayers.some((player) => manualAssignments[player.id] === teamIndex)))) { setSetupMessage("A divisão manual precisa ter pelo menos um jogador em cada time."); return { ok: false, error: "Escolha pelo menos um jogador para cada time." }; }
+    const teams = data.settings.drawMode === "manual" ? buildManualTeams(ratedPlayers, manualAssignments, data.settings.startersPerTeam) : drawTeams(ratedPlayers, data.settings.drawMode, data.settings.startersPerTeam);
+    const match = { id: uid(), date: new Date().toISOString(), sport: data.settings.sport, durationSeconds, remainingSeconds: durationSeconds, running: false, attendanceIds: ratedPlayers.map((player) => player.id), teams, score: [0, 0], events: [] };
     setData((current) => ({ ...current, activeMatch: match }));
     setView("match");
     return { ok: true, matchId: match.id };
-  }, [data.players, data.settings]);
+  }, [data.settings, manualAssignments, playerStats, presentPlayers]);
 
-  const registerGoal = useCallback((teamIndex, playerId) => {
+  const registerGoal = useCallback((teamIndex, playerId, assistPlayerId = "") => {
     let result = { ok: false, error: "Jogador não encontrado." };
     setData((current) => {
       const match = current.activeMatch;
       const player = match?.teams[teamIndex]?.starters.find((item) => item.id === playerId);
+      const assistPlayer = match?.teams[teamIndex]?.starters.find((item) => item.id === assistPlayerId);
       if (!match || !player) return current;
       const score = [...match.score];
       score[teamIndex] += 1;
-      const event = { id: uid(), type: "goal", teamIndex, playerId, playerName: player.name, minute: minuteOf(match) };
+      const event = { id: uid(), type: "goal", teamIndex, playerId, playerName: player.name, assistPlayerId: assistPlayer?.id || null, assistPlayerName: assistPlayer?.name || null, minute: minuteOf(match) };
       result = { ok: true, player: player.name, score };
       return { ...current, activeMatch: { ...match, score, events: [event, ...match.events] } };
     });
     setGoalTeam(null);
+    setGoalScorer("");
+    setGoalAssist("");
     return result;
   }, []);
 
@@ -254,7 +482,7 @@ export default function Home() {
     const register = (tool) => {
       try { Promise.resolve(context.registerTool(tool, { signal: lifecycle.signal })).catch(() => {}); } catch {}
     };
-    register({ name: "add_player", title: "Adicionar jogador", description: "Adiciona um jogador à lista da pelada.", inputSchema: { type: "object", properties: { name: { type: "string" }, level: { type: "number", minimum: 1, maximum: 5 } }, required: ["name"], additionalProperties: false }, annotations: { readOnlyHint: false, untrustedContentHint: false }, execute: ({ name, level = 3 }) => addPlayer(name, level) });
+    register({ name: "add_player", title: "Adicionar jogador", description: "Adiciona um jogador à lista do Resenha.", inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"], additionalProperties: false }, annotations: { readOnlyHint: false, untrustedContentHint: false }, execute: ({ name }) => addPlayer(name) });
     register({ name: "start_match", title: "Sortear times e iniciar jogo", description: "Sorteia os dois times e abre a partida.", inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: false, untrustedContentHint: false }, execute: () => startMatch() });
     register({ name: "record_goal", title: "Registrar gol", description: "Registra um gol de um titular na partida atual.", inputSchema: { type: "object", properties: { teamIndex: { type: "number", enum: [0, 1] }, playerId: { type: "string" } }, required: ["teamIndex", "playerId"], additionalProperties: false }, annotations: { readOnlyHint: false, untrustedContentHint: false }, execute: ({ teamIndex, playerId }) => registerGoal(teamIndex, playerId) });
     return () => lifecycle.abort();
@@ -262,7 +490,13 @@ export default function Home() {
 
   const updateSettings = (field, value) => setData((current) => ({ ...current, settings: { ...current.settings, [field]: value } }));
   const changeSport = (sport) => setData((current) => ({ ...current, settings: { ...current.settings, sport, startersPerTeam: startersBySport[sport] } }));
-  const removePlayer = (id) => setData((current) => ({ ...current, players: current.players.filter((player) => player.id !== id) }));
+  const removePlayer = (id) => setData((current) => ({ ...current, players: current.players.filter((player) => player.id !== id), settings: { ...current.settings, attendanceIds: Array.isArray(current.settings.attendanceIds) ? current.settings.attendanceIds.filter((playerId) => playerId !== id) : current.settings.attendanceIds } }));
+  const toggleAttendance = (playerId) => setData((current) => {
+    const currentIds = Array.isArray(current.settings.attendanceIds) ? current.settings.attendanceIds : current.players.map((player) => player.id);
+    const attendanceIds = currentIds.includes(playerId) ? currentIds.filter((id) => id !== playerId) : [...currentIds, playerId];
+    return { ...current, settings: { ...current.settings, attendanceIds } };
+  });
+  const setAllAttendance = (present) => setData((current) => ({ ...current, settings: { ...current.settings, attendanceIds: present ? current.players.map((player) => player.id) : [] } }));
   const toggleTimer = () => setData((current) => !current.activeMatch || current.activeMatch.remainingSeconds === 0 ? current : ({ ...current, activeMatch: { ...current.activeMatch, running: !current.activeMatch.running } }));
   const resetTimer = () => setData((current) => ({ ...current, activeMatch: current.activeMatch ? { ...current.activeMatch, remainingSeconds: current.activeMatch.durationSeconds, running: false } : null }));
 
@@ -309,13 +543,76 @@ export default function Home() {
     setView("setup");
   };
 
+  const addTrainingExercise = () => {
+    const name = exerciseDraft.name.trim();
+    const target = Math.max(1, Number(exerciseDraft.target) || 1);
+    if (!name) return;
+    setTrainingExercises((current) => [...current, { id: uid(), name, mode: exerciseDraft.mode, target }]);
+    setExerciseDraft({ name: "", mode: exerciseDraft.mode, target: exerciseDraft.mode === "time" ? 30 : 10 });
+  };
+
+  const saveTrainingPlan = (event) => {
+    event.preventDefault();
+    const name = trainingName.trim();
+    if (!name || trainingExercises.length === 0) {
+      setSettingsMessage("Dê um nome ao treino e adicione pelo menos um exercício.");
+      return;
+    }
+    const plan = { id: uid(), name, days: trainingDays, exercises: trainingExercises, createdAt: new Date().toISOString() };
+    setData((current) => ({ ...current, trainingPlans: [...(current.trainingPlans || []), plan] }));
+    setTrainingName("");
+    setTrainingDays([]);
+    setTrainingExercises([]);
+    setSettingsMessage("Treino salvo no cronograma.");
+  };
+
+  const startTraining = (plan) => {
+    const first = plan.exercises[0];
+    setData((current) => ({ ...current, activeTraining: { id: uid(), planId: plan.id, name: plan.name, exercises: plan.exercises, currentIndex: 0, remainingSeconds: first.mode === "time" ? first.target : 0, running: false, completed: [], startedAt: new Date().toISOString() } }));
+    setView("training");
+  };
+
+  const completeTrainingExercise = () => setData((current) => {
+    const training = current.activeTraining;
+    if (!training) return current;
+    const exercise = training.exercises[training.currentIndex];
+    const completed = [...training.completed, { exerciseId: exercise.id, name: exercise.name, mode: exercise.mode, target: exercise.target, completedAt: new Date().toISOString() }];
+    const nextIndex = training.currentIndex + 1;
+    if (nextIndex >= training.exercises.length) {
+      const finished = { id: training.id, planId: training.planId, name: training.name, startedAt: training.startedAt, finishedAt: new Date().toISOString(), exercises: completed };
+      return { ...current, activeTraining: null, trainingHistory: [finished, ...(current.trainingHistory || [])] };
+    }
+    const next = training.exercises[nextIndex];
+    return { ...current, activeTraining: { ...training, currentIndex: nextIndex, remainingSeconds: next.mode === "time" ? next.target : 0, running: false, completed } };
+  });
+
+  const toggleTrainingTimer = () => setData((current) => !current.activeTraining || current.activeTraining.remainingSeconds === 0 ? current : ({ ...current, activeTraining: { ...current.activeTraining, running: !current.activeTraining.running } }));
+  const resetTrainingTimer = () => setData((current) => {
+    if (!current.activeTraining) return current;
+    const exercise = current.activeTraining.exercises[current.activeTraining.currentIndex];
+    return { ...current, activeTraining: { ...current.activeTraining, remainingSeconds: exercise.mode === "time" ? exercise.target : 0, running: false } };
+  });
+  const cancelTraining = () => {
+    if (!window.confirm("Encerrar este treino sem registrar os exercícios restantes?")) return;
+    setData((current) => ({ ...current, activeTraining: null }));
+  };
+  const deleteTrainingPlan = (planId) => {
+    if (!window.confirm("Excluir este treino do cronograma? O histórico realizado será mantido.")) return;
+    setData((current) => ({ ...current, trainingPlans: (current.trainingPlans || []).filter((plan) => plan.id !== planId) }));
+  };
+
   const monthMatches = useMemo(() => data.history.filter((match) => monthKey(match.finishedAt || match.date) === month), [data.history, month]);
   const ranking = useMemo(() => {
     const goals = new Map();
     monthMatches.forEach((match) => match.events.filter((event) => event.type === "goal").forEach((event) => {
-      const item = goals.get(event.playerId) || { id: event.playerId, name: event.playerName, goals: 0 };
+      const item = goals.get(event.playerId) || { id: event.playerId, name: event.playerName, goals: 0, assists: 0 };
       item.goals += 1;
       goals.set(event.playerId, item);
+      if (event.assistPlayerId) {
+        const assistant = goals.get(event.assistPlayerId) || { id: event.assistPlayerId, name: event.assistPlayerName, goals: 0, assists: 0 };
+        assistant.assists += 1;
+        goals.set(event.assistPlayerId, assistant);
+      }
     }));
     return [...goals.values()].sort((a, b) => b.goals - a.goals || a.name.localeCompare(b.name));
   }, [monthMatches]);
@@ -342,10 +639,173 @@ export default function Home() {
     }
   };
 
+  const sendPasswordReset = async () => {
+    const email = authEmail.trim();
+    if (!email) {
+      setAuthMessage("Digite seu e-mail para receber o link de recuperação.");
+      return;
+    }
+    setAuthBusy(true);
+    setAuthMessage("");
+    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${window.location.origin}${import.meta.env.BASE_URL}` });
+    setAuthBusy(false);
+    setAuthMessage(error ? error.message : "Se o e-mail estiver cadastrado, você receberá um link para criar uma nova senha.");
+  };
+
+  const submitRecoveryPassword = async (event) => {
+    event.preventDefault();
+    if (recoveryPassword.length < 6) {
+      setAuthMessage("A nova senha precisa ter pelo menos 6 caracteres.");
+      return;
+    }
+    if (recoveryPassword !== recoveryConfirm) {
+      setAuthMessage("As senhas digitadas não são iguais.");
+      return;
+    }
+    setAuthBusy(true);
+    setAuthMessage("");
+    const { error } = await supabase.auth.updateUser({ password: recoveryPassword });
+    if (!error) await supabase.auth.signOut();
+    setAuthBusy(false);
+    if (error) {
+      setAuthMessage(error.message);
+      return;
+    }
+    setPasswordRecovery(false);
+    setRecoveryPassword("");
+    setRecoveryConfirm("");
+    setAuthMessage("Senha alterada com sucesso. Entre novamente com a nova senha.");
+  };
+
+  const openProfile = () => {
+    setProfileName(displayName);
+    setProfileAvatar(data.profile?.avatar || "");
+    setProfileMessage("");
+    setProfileMenuOpen(false);
+    setProfileOpen(true);
+  };
+
+  const selectProfileImage = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setProfileMessage("Processando imagem...");
+    try {
+      setProfileAvatar(await optimizeProfileImage(file));
+      setProfileMessage("Imagem pronta. Salve o perfil para confirmar.");
+    } catch (error) {
+      setProfileMessage(error.message);
+    }
+  };
+
+  const saveProfile = async (event) => {
+    event.preventDefault();
+    const nextName = profileName.trim();
+    if (!nextName) {
+      setProfileMessage("Informe o nome que deve aparecer no aplicativo.");
+      return;
+    }
+    setAuthBusy(true);
+    const { error } = await supabase.auth.updateUser({ data: { display_name: nextName } });
+    setAuthBusy(false);
+    if (error) {
+      setProfileMessage(error.message);
+      return;
+    }
+    setData((current) => ({ ...current, profile: { displayName: nextName, avatar: profileAvatar } }));
+    setProfileMessage("Perfil atualizado com sucesso.");
+  };
+
+  const savePlayerName = () => {
+    const nextName = editingPlayer?.name?.trim();
+    const original = managedPlayers.find((player) => player.id === editingPlayer?.id);
+    if (!original || !nextName) return;
+    if (managedPlayers.some((player) => player.id !== original.id && player.name.toLowerCase() === nextName.toLowerCase())) {
+      setSettingsMessage("Já existe um jogador com esse nome.");
+      return;
+    }
+    setData((current) => ({
+      ...current,
+      players: current.players.map((player) => player.id === original.id ? { ...player, name: nextName } : player),
+      activeMatch: renamePlayerInMatch(current.activeMatch, original.id, original.name, nextName),
+      history: current.history.map((game) => renamePlayerInMatch(game, original.id, original.name, nextName)),
+    }));
+    setEditingPlayer(null);
+    setSettingsMessage(`${original.name} foi alterado para ${nextName}.`);
+  };
+
+  const deletePlayerEverywhere = (player) => {
+    if (!window.confirm(`Excluir ${player.name} do cadastro e remover suas pontuações do histórico? Esta ação não pode ser desfeita.`)) return;
+    setData((current) => ({
+      ...current,
+      players: current.players.filter((item) => item.id !== player.id),
+      settings: { ...current.settings, attendanceIds: Array.isArray(current.settings.attendanceIds) ? current.settings.attendanceIds.filter((id) => id !== player.id) : current.settings.attendanceIds },
+      activeMatch: removePlayerFromMatch(current.activeMatch, player.id),
+      history: current.history.map((game) => removePlayerFromMatch(game, player.id)),
+    }));
+    setSettingsMessage(`${player.name} e suas pontuações foram excluídos.`);
+  };
+
+  const openMatchEditor = (game) => {
+    setEditingMatch({ id: game.id, date: new Date(game.finishedAt || game.date).toLocaleDateString("sv-SE"), sport: game.sport, score0: game.score?.[0] || 0, score1: game.score?.[1] || 0 });
+    setSettingsMessage("");
+  };
+
+  const saveMatchEdit = (event) => {
+    event.preventDefault();
+    if (!editingMatch) return;
+    const nextDate = new Date(`${editingMatch.date}T12:00:00`).toISOString();
+    setData((current) => ({ ...current, history: current.history.map((game) => game.id !== editingMatch.id ? game : { ...game, sport: editingMatch.sport, date: nextDate, finishedAt: nextDate, score: [Math.max(0, Number(editingMatch.score0) || 0), Math.max(0, Number(editingMatch.score1) || 0)] }) }));
+    setEditingMatch(null);
+    setSettingsMessage("Partida atualizada. A artilharia continua baseada nos autores registrados na súmula.");
+  };
+
+  const deleteMatch = (game) => {
+    const date = new Date(game.finishedAt || game.date).toLocaleDateString("pt-BR");
+    if (!window.confirm(`Excluir a partida de ${date}? As pontuações desse jogo também sairão do ranking.`)) return;
+    setData((current) => ({ ...current, history: current.history.filter((item) => item.id !== game.id) }));
+    setSettingsMessage("Partida e pontuações removidas do histórico.");
+  };
+
+  const changeLoggedPassword = async (event) => {
+    event.preventDefault();
+    if (!currentPassword) {
+      setSettingsMessage("Informe a senha atual.");
+      return;
+    }
+    if (newPassword.length < 6) {
+      setSettingsMessage("A nova senha precisa ter pelo menos 6 caracteres.");
+      return;
+    }
+    if (newPassword !== confirmNewPassword) {
+      setSettingsMessage("As senhas digitadas não são iguais.");
+      return;
+    }
+    setAuthBusy(true);
+    const verification = await supabase.auth.signInWithPassword({ email: session.user.email, password: currentPassword });
+    if (verification.error) {
+      setAuthBusy(false);
+      setSettingsMessage("A senha atual está incorreta.");
+      return;
+    }
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    setAuthBusy(false);
+    if (error) {
+      setSettingsMessage(error.message);
+      return;
+    }
+    setCurrentPassword("");
+    setNewPassword("");
+    setConfirmNewPassword("");
+    setSettingsMessage("Senha alterada com sucesso.");
+  };
+
   const signOut = async () => {
     if (dirtyRef.current) await syncNow();
     await supabase.auth.signOut();
     setCloudOpen(false);
+    setProfileMenuOpen(false);
+    setProfileOpen(false);
     setData(initialState);
     dataRef.current = initialState;
     dirtyRef.current = false;
@@ -361,7 +821,7 @@ export default function Home() {
     const url = URL.createObjectURL(file);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `pelada-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    link.download = `resenha-backup-${new Date().toISOString().slice(0, 10)}.json`;
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -388,61 +848,97 @@ export default function Home() {
 
   if (!authReady) return <main className="app-shell loading">Verificando acesso…</main>;
   if (!supabaseConfigured) return <AuthSetupRequired theme={theme} setTheme={setTheme} />;
-  if (!session) return <AuthScreen mode={authMode} setMode={setAuthMode} email={authEmail} setEmail={setAuthEmail} password={authPassword} setPassword={setAuthPassword} showPassword={showPassword} setShowPassword={setShowPassword} message={authMessage} busy={authBusy} onSubmit={submitAuth} theme={theme} setTheme={setTheme} />;
-  if (!ready) return <main className="app-shell loading">Preparando a pelada…</main>;
+  if (passwordRecovery) return <PasswordRecoveryScreen password={recoveryPassword} setPassword={setRecoveryPassword} confirm={recoveryConfirm} setConfirm={setRecoveryConfirm} message={authMessage} busy={authBusy} onSubmit={submitRecoveryPassword} onBack={() => { supabase.auth.signOut(); setPasswordRecovery(false); setAuthMessage(""); }} theme={theme} setTheme={setTheme} />;
+  if (!session) return <AuthScreen mode={authMode} setMode={setAuthMode} email={authEmail} setEmail={setAuthEmail} password={authPassword} setPassword={setAuthPassword} showPassword={showPassword} setShowPassword={setShowPassword} message={authMessage} busy={authBusy} onSubmit={submitAuth} onForgot={sendPasswordReset} theme={theme} setTheme={setTheme} />;
+  if (!ready) return <main className="app-shell loading">Preparando o Resenha…</main>;
   const match = data.activeMatch;
+  const activeTraining = data.activeTraining;
+  const activeExercise = activeTraining?.exercises?.[activeTraining.currentIndex] || null;
 
   return (
     <main className="app-shell">
       <header className="topbar">
-        <button className="brand" onClick={() => setView("setup")} aria-label="Ir para o início"><span className="brand-mark"><Goal size={24} /></span><span><strong>Pelada da Semana</strong><small>Times, placar e artilharia</small></span></button>
+        <button className="brand" onClick={() => setView("setup")} aria-label="Ir para o início"><span className="brand-mark"><Goal size={24} /></span><span><strong>Resenha</strong><small>Times, placar e desempenho</small></span></button>
         <div className="topbar-actions">
-          <div className="topbar-status"><span className={`status-dot ${match ? "live" : ""}`} />{match ? "Partida em andamento" : `${data.players.length} jogadores no grupo`}</div>
+          <div className="app-menu-area" ref={appMenuRef}><button className="menu-trigger" onClick={() => setAppMenuOpen((current) => !current)} aria-expanded={appMenuOpen} aria-haspopup="menu"><Menu size={20} /><span>Menu</span></button>{appMenuOpen && <nav className="app-menu-dropdown" aria-label="Menu principal"><button className={view === "setup" ? "active" : ""} onClick={() => { setView("setup"); setAppMenuOpen(false); }}><Users size={18} /><span><strong>Preparar jogo</strong><small>Presença e divisão dos times</small></span></button><button className={view === "match" ? "active" : ""} disabled={!match} onClick={() => { setView("match"); setAppMenuOpen(false); }}><Activity size={18} /><span><strong>Partida</strong><small>Placar, tempo e súmula</small></span></button><button className={view === "stats" ? "active" : ""} onClick={() => { setView("stats"); setAppMenuOpen(false); }}><BarChart3 size={18} /><span><strong>Estatísticas</strong><small>Artilharia e resultados</small></span></button><button className={view === "evolution" ? "active" : ""} onClick={() => { setView("evolution"); setAppMenuOpen(false); }}><TrendingUp size={18} /><span><strong>Evolução</strong><small>Desempenho de cada jogador</small></span></button><button className={view === "training" ? "active" : ""} onClick={() => { setSettingsMessage(""); setView("training"); setAppMenuOpen(false); }}><Dumbbell size={18} /><span><strong>Modo treino</strong><small>Cronograma e preparação física</small></span></button></nav>}</div>
           <button className="icon-button theme-button" onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")} aria-label={theme === "dark" ? "Ativar modo claro" : "Ativar modo escuro"}>{theme === "dark" ? <Sun size={19} /> : <Moon size={19} />}</button>
           <button className="cloud-button connected" onClick={() => setCloudOpen(true)}><Cloud size={18} /><span>{syncLabel}</span></button>
+          <div className="profile-area" ref={profileMenuRef}>
+            <button className="profile-trigger" onClick={() => setProfileMenuOpen((current) => !current)} aria-expanded={profileMenuOpen} aria-haspopup="menu"><ProfileAvatar name={displayName} src={data.profile?.avatar} /><span><strong>{displayName}</strong><small>{session.user.email}</small></span><ChevronDown size={16} /></button>
+            {profileMenuOpen && <div className="profile-dropdown" role="menu"><button onClick={openProfile} role="menuitem"><UserRound size={17} /><span><strong>Meu perfil</strong><small>Nome e foto</small></span></button><button onClick={() => { setProfileMenuOpen(false); setSettingsMessage(""); setView("settings"); }} role="menuitem"><Settings size={17} /><span><strong>Configurações</strong><small>Jogadores e partidas</small></span></button><button onClick={() => { setProfileMenuOpen(false); setSettingsMessage(""); setCurrentPassword(""); setNewPassword(""); setConfirmNewPassword(""); setView("password"); }} role="menuitem"><KeyRound size={17} /><span><strong>Trocar senha</strong><small>Validar senha atual</small></span></button><button className="logout-item" onClick={signOut} role="menuitem"><LogOut size={17} /><span><strong>Sair</strong><small>Encerrar acesso</small></span></button></div>}
+          </div>
         </div>
       </header>
 
       <div className="page-wrap">
-        <nav className="nav-tabs nav-list" aria-label="Navegação principal"><button className={`nav-item ${view === "setup" ? "active" : ""}`} onClick={() => setView("setup")}><Users size={18} /> Preparar jogo</button><button className={`nav-item ${view === "match" ? "active" : ""}`} onClick={() => setView("match")} disabled={!match}><Activity size={18} /> Partida</button><button className={`nav-item ${view === "stats" ? "active" : ""}`} onClick={() => setView("stats")}><BarChart3 size={18} /> Artilharia</button></nav>
-
         {view === "setup" && <section className="view-grid setup-grid">
           <div className="main-column">
             <div className="section-heading"><div><span className="eyebrow">PASSO 1</span><h1>Quem vai jogar hoje?</h1></div><span className="count-pill">{data.players.length} cadastrados</span></div>
             <form className="add-player" onSubmit={(event) => { event.preventDefault(); addPlayer(); }}>
               <div className="field grow"><label htmlFor="player-name">Nome do jogador</label><input ref={nameInput} id="player-name" value={playerName} onChange={(event) => setPlayerName(event.target.value)} placeholder="Ex.: João" autoComplete="off" /></div>
-              <div className="field level-field"><label htmlFor="player-level">Nível</label><select id="player-level" value={playerLevel} onChange={(event) => setPlayerLevel(Number(event.target.value))}>{[1,2,3,4,5].map((level) => <option key={level}>{level}</option>)}</select></div>
               <button className="button primary add-button" type="submit"><UserPlus size={19} /> Adicionar</button>
             </form>
-            <div className="player-list">{data.players.length === 0 ? <Empty icon={<Users size={28} />} title="A lista ainda está vazia" text="Adicione os amigos que vão participar do jogo." /> : data.players.map((player, index) => <article className="player-row" key={player.id}><Avatar name={player.name} /><div className="player-info"><strong>{player.name}</strong><span>Jogador #{String(index + 1).padStart(2, "0")}</span></div><div className="level-dots" aria-label={`Nível ${player.level} de 5`}>{[1,2,3,4,5].map((dot) => <i key={dot} className={dot <= player.level ? "filled" : ""} />)}</div><button className="icon-button danger" onClick={() => removePlayer(player.id)} aria-label={`Remover ${player.name}`}><Trash2 size={17} /></button></article>)}</div>
+            <div className="attendance-toolbar"><div><Check size={18} /><span><strong>Presença de hoje</strong><small>{presentPlayers.length} de {data.players.length} confirmados</small></span></div><div><button type="button" onClick={() => setAllAttendance(true)}>Todos</button><button type="button" onClick={() => setAllAttendance(false)}>Nenhum</button></div></div>
+            <div className="player-list">{data.players.length === 0 ? <Empty icon={<Users size={28} />} title="A lista ainda está vazia" text="Adicione os amigos que vão participar do jogo." /> : visiblePlayers.map((player, index) => {
+              const stats = playerStats.get(player.id);
+              const present = presentPlayers.some((item) => item.id === player.id);
+              return <article className={`player-row ${present ? "is-present" : "is-absent"}`} key={player.id}><Avatar name={player.name} /><div className="player-info"><strong>{player.name}</strong><span>Jogador #{String((playerPage - 1) * PLAYER_PAGE_SIZE + index + 1).padStart(2, "0")} · {stats.matches} {stats.matches === 1 ? "partida" : "partidas"} · {stats.totalPoints} {scoreWord(data.settings.sport, stats.totalPoints)}</span></div><div className="player-rating"><Stars rating={stats.rating} label={`Nível geral: ${stats.rating} de 5`} /><small>{stats.label} · média {stats.average.toFixed(1)}</small>{stats.lastRating !== null && <em>Último jogo: {stats.lastRating}★</em>}</div><button className={`presence-button ${present ? "present" : ""}`} type="button" onClick={() => toggleAttendance(player.id)} aria-pressed={present}>{present ? <><Check size={15} /> Presente</> : "Ausente"}</button><button className="icon-button danger" onClick={() => removePlayer(player.id)} aria-label={`Remover ${player.name}`}><Trash2 size={17} /></button></article>;
+            })}</div>
+            {data.players.length > PLAYER_PAGE_SIZE && <Pagination page={playerPage} pageCount={playerPageCount} onChange={setPlayerPage} />}
           </div>
           <aside className="config-card">
             <div className="section-heading compact"><div><span className="eyebrow">PASSO 2</span><h2>Configurar partida</h2></div><Sparkles size={21} /></div>
             <div className="field"><label htmlFor="sport">Esporte</label><select id="sport" value={data.settings.sport} onChange={(event) => changeSport(event.target.value)}>{Object.keys(startersBySport).map((sport) => <option key={sport}>{sport}</option>)}</select></div>
             <div className="two-fields"><div className="field"><label htmlFor="duration">Tempo de jogo</label><div className="input-suffix"><input id="duration" type="number" min="1" max="120" value={data.settings.duration} onChange={(event) => updateSettings("duration", Math.max(1, Number(event.target.value)))} /><span>min</span></div></div><div className="field"><label htmlFor="starters">Em jogo por time</label><input id="starters" type="number" min="1" max="11" value={data.settings.startersPerTeam} onChange={(event) => updateSettings("startersPerTeam", Math.max(1, Number(event.target.value)))} /></div></div>
-            <fieldset className="mode-group"><legend>Modo do sorteio</legend><Mode active={data.settings.drawMode === "balanced"} onClick={() => updateSettings("drawMode", "balanced")} icon={<Shield size={19} />} title="Equilibrado" text="Distribui os níveis" /><Mode active={data.settings.drawMode === "random"} onClick={() => updateSettings("drawMode", "random")} icon={<Sparkles size={19} />} title="Aleatório" text="Sem considerar nível" /></fieldset>
+            <fieldset className="mode-group"><legend>Divisão dos times</legend><Mode active={data.settings.drawMode === "balanced"} onClick={() => updateSettings("drawMode", "balanced")} icon={<Shield size={19} />} title="Equilibrado" text="Usa o desempenho geral" /><Mode active={data.settings.drawMode === "random"} onClick={() => updateSettings("drawMode", "random")} icon={<Sparkles size={19} />} title="Aleatório" text="Sem considerar nível" /><Mode active={data.settings.drawMode === "manual"} onClick={() => updateSettings("drawMode", "manual")} icon={<Users size={19} />} title="Manual" text="Escolha cada time" /></fieldset>
+            {data.settings.drawMode === "manual" && <div className="manual-teams"><header><strong>Divisão manual</strong><small>Defina o time dos presentes</small></header>{presentPlayers.map((player) => <div className="manual-player" key={player.id}><span>{player.name}</span><div><button type="button" className={manualAssignments[player.id] === 0 ? "blue active" : "blue"} onClick={() => setManualAssignments((current) => ({ ...current, [player.id]: 0 }))}>Azul</button><button type="button" className={manualAssignments[player.id] === 1 ? "orange active" : "orange"} onClick={() => setManualAssignments((current) => ({ ...current, [player.id]: 1 }))}>Laranja</button></div></div>)}</div>}
             <div className="config-summary"><Clock3 size={18} /><span><strong>{data.settings.duration} minutos</strong> · {data.settings.startersPerTeam} titulares por time</span></div>
-            <button className="button primary large full" onClick={startMatch} disabled={data.players.length < 2}>Sortear times e abrir jogo <ChevronRight size={20} /></button>{data.players.length < 2 && <p className="helper">Adicione pelo menos 2 jogadores para começar.</p>}
+            <button className="button primary large full" onClick={startMatch} disabled={presentPlayers.length < 2}>{data.settings.drawMode === "manual" ? "Confirmar times e abrir jogo" : "Sortear times e abrir jogo"} <ChevronRight size={20} /></button>{(presentPlayers.length < 2 || setupMessage) && <p className="helper error-helper">{setupMessage || "Marque pelo menos 2 jogadores presentes."}</p>}
+            <section className="last-leaders"><header><span><Trophy size={18} /></span><div><strong>Destaques do último jogo</strong><small>{data.history[0] ? new Date(data.history[0].finishedAt || data.history[0].date).toLocaleDateString("pt-BR") : "Aguardando a primeira partida"}</small></div></header>{lastMatchLeaders.length ? <div>{lastMatchLeaders.map((leader, index) => <div className="last-leader-row" key={leader.id}><b>{index + 1}</b><Avatar name={leader.name} /><span>{leader.name}</span><strong>{leader.points} {scoreWord(data.history[0]?.sport, leader.points)}</strong></div>)}</div> : <p>Encerre uma partida com pontuação para ver o pódio aqui.</p>}</section>
           </aside>
         </section>}
 
         {view === "match" && match && <section className="match-view">
           <div className="scoreboard"><TeamScore team={match.teams[0]} score={match.score[0]} /><div className="timer-panel"><span className={match.running ? "live-label" : "live-label paused"}>{match.running ? "EM JOGO" : match.remainingSeconds === 0 ? "FIM DO TEMPO" : "PAUSADO"}</span><strong className={match.remainingSeconds <= 60 ? "ending" : ""}>{formatTime(match.remainingSeconds)}</strong><div className="timer-actions"><button className="button timer-button" onClick={toggleTimer}>{match.running ? <CirclePause size={19} /> : <CirclePlay size={19} />}{match.running ? "Pausar" : "Iniciar"}</button><button className="icon-button" onClick={resetTimer} aria-label="Reiniciar cronômetro"><RotateCcw size={18} /></button></div></div><TeamScore team={match.teams[1]} score={match.score[1]} /></div>
           <div className="match-grid">
-            {match.teams.map((team, teamIndex) => <TeamCard key={team.name} team={team} onGoal={() => setGoalTeam(teamIndex)} onSub={() => openSubstitution(teamIndex)} />)}
-            <aside className="events-card"><header><div><span className="eyebrow">SÚMULA</span><h2>Lances do jogo</h2></div><span className="event-count">{match.events.length}</span></header><div className="events-list">{match.events.length === 0 ? <div className="empty-events"><Activity size={25} /><span>Os gols e trocas aparecerão aqui.</span></div> : match.events.map((event) => <div className={`event-row ${event.type}`} key={event.id}><span className="event-minute">{event.minute}&apos;</span><span className={`event-icon ${match.teams[event.teamIndex].color}`}>{event.type === "goal" ? <Goal size={17} /> : <ArrowDownUp size={17} />}</span><div>{event.type === "goal" ? <><strong>Gol de {event.playerName}</strong><small>{match.teams[event.teamIndex].name}</small></> : <><strong>Entrou {event.playerIn}</strong><small>Saiu {event.playerOut}</small></>}</div>{event.type === "goal" && <button className="icon-button mini" onClick={() => undoGoal(event.id)} aria-label="Desfazer gol"><X size={14} /></button>}</div>)}</div><div className="finish-actions"><button className="button primary full" onClick={finishMatch}><Check size={18} /> Encerrar e salvar jogo</button><button className="text-button danger-text" onClick={cancelMatch}>Descartar partida</button></div></aside>
+            {match.teams.map((team, teamIndex) => <TeamCard key={team.name} team={team} onGoal={() => { setGoalTeam(teamIndex); setGoalScorer(""); setGoalAssist(""); }} onSub={() => openSubstitution(teamIndex)} />)}
+            <aside className="events-card"><header><div><span className="eyebrow">SÚMULA</span><h2>Lances do jogo</h2></div><span className="event-count">{match.events.length}</span></header><div className="events-list">{match.events.length === 0 ? <div className="empty-events"><Activity size={25} /><span>Os gols e trocas aparecerão aqui.</span></div> : match.events.map((event) => <div className={`event-row ${event.type}`} key={event.id}><span className="event-minute">{event.minute}&apos;</span><span className={`event-icon ${match.teams[event.teamIndex].color}`}>{event.type === "goal" ? <Goal size={17} /> : <ArrowDownUp size={17} />}</span><div>{event.type === "goal" ? <><strong>Gol de {event.playerName}</strong><small>{event.assistPlayerName ? `Assistência de ${event.assistPlayerName} · ` : ""}{match.teams[event.teamIndex].name}</small></> : <><strong>Entrou {event.playerIn}</strong><small>Saiu {event.playerOut}</small></>}</div>{event.type === "goal" && <button className="icon-button mini" onClick={() => undoGoal(event.id)} aria-label="Desfazer gol"><X size={14} /></button>}</div>)}</div><div className="finish-actions"><button className="button primary full" onClick={finishMatch}><Check size={18} /> Encerrar e salvar jogo</button><button className="text-button danger-text" onClick={cancelMatch}>Descartar partida</button></div></aside>
           </div>
         </section>}
 
         {view === "stats" && <section className="stats-view">
           <div className="section-heading stats-heading"><div><span className="eyebrow">FECHAMENTO DO MÊS</span><h1>Artilharia e resultados</h1></div><label className="month-picker"><CalendarDays size={18} /><input type="month" value={month} onChange={(event) => setMonth(event.target.value)} /></label></div>
           <div className="summary-strip"><Summary icon={<Trophy size={20} />} label="Artilheiro" value={ranking[0]?.name || "—"} /><Summary icon={<Goal size={20} />} label="Gols no mês" value={ranking.reduce((sum, item) => sum + item.goals, 0)} /><Summary icon={<CalendarDays size={20} />} label="Jogos realizados" value={monthMatches.length} /></div>
-          <div className="stats-grid"><article className="ranking-card"><header><div><span className="eyebrow">RANKING</span><h2>Artilheiros do mês</h2></div><Medal size={23} /></header>{ranking.length === 0 ? <Empty icon={<Goal size={28} />} title="Nenhum gol registrado" text="Encerre uma partida para contabilizar a artilharia." /> : <div className="ranking-list">{ranking.map((player, index) => <div className={`ranking-row rank-${index + 1}`} key={player.id}><span className="rank-number">{index + 1}</span><Avatar name={player.name} /><strong>{player.name}</strong><div className="goal-total"><b>{player.goals}</b><small>{player.goals === 1 ? "gol" : "gols"}</small></div></div>)}</div>}</article><article className="history-card"><header><div><span className="eyebrow">HISTÓRICO</span><h2>Jogos do mês</h2></div></header>{monthMatches.length === 0 ? <Empty icon={<CalendarDays size={28} />} title="Nenhum jogo neste mês" text="Os resultados salvos ficarão organizados aqui." /> : <div className="history-list">{monthMatches.map((game) => <div className="history-row" key={game.id}><div className="history-date"><strong>{new Date(game.finishedAt || game.date).toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}</strong><small>{game.sport}</small></div><div className="history-score"><span>{game.teams[0].short}</span><strong>{game.score[0]} <i>×</i> {game.score[1]}</strong><span>{game.teams[1].short}</span></div></div>)}</div>}</article></div>
+          <div className="stats-grid"><article className="ranking-card"><header><div><span className="eyebrow">RANKING</span><h2>Artilheiros do mês</h2></div><Medal size={23} /></header>{ranking.length === 0 ? <Empty icon={<Goal size={28} />} title="Nenhum gol registrado" text="Encerre uma partida para contabilizar a artilharia." /> : <div className="ranking-list">{ranking.map((player, index) => <div className={`ranking-row rank-${index + 1}`} key={player.id}><span className="rank-number">{index + 1}</span><Avatar name={player.name} /><strong>{player.name}</strong><div className="goal-total"><b>{player.goals}</b><small>{player.goals === 1 ? "gol" : "gols"} · {player.assists} {player.assists === 1 ? "assist." : "assist."}</small></div></div>)}</div>}</article><article className="history-card"><header><div><span className="eyebrow">HISTÓRICO</span><h2>Jogos do mês</h2></div></header>{monthMatches.length === 0 ? <Empty icon={<CalendarDays size={28} />} title="Nenhum jogo neste mês" text="Os resultados salvos ficarão organizados aqui." /> : <div className="history-list">{monthMatches.map((game) => <div className="history-row" key={game.id}><div className="history-date"><strong>{new Date(game.finishedAt || game.date).toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}</strong><small>{game.sport} · {(game.attendanceIds || game.teams.flatMap((team) => [...team.starters, ...team.bench])).length} presentes</small></div><div className="history-score"><span>{game.teams[0].short}</span><strong>{game.score[0]} <i>×</i> {game.score[1]}</strong><span>{game.teams[1].short}</span></div></div>)}</div>}</article></div>
+        </section>}
+
+        {view === "evolution" && <section className="evolution-view">
+          <div className="section-heading stats-heading"><div><span className="eyebrow">DESEMPENHO INDIVIDUAL</span><h1>Evolução mensal</h1><p className="section-description">Compare presença, pontuações, assistências e nível por partida.</p></div><div className="evolution-filters"><select value={evolutionPlayer?.id || ""} onChange={(event) => setEvolutionPlayerId(event.target.value)} disabled={!managedPlayers.length}>{managedPlayers.length ? managedPlayers.map((player) => <option key={player.id} value={player.id}>{player.name}</option>) : <option>Nenhum jogador</option>}</select><input type="month" value={evolutionMonth} onChange={(event) => setEvolutionMonth(event.target.value)} /></div></div>
+          {!evolutionPlayer ? <article className="settings-card"><Empty icon={<TrendingUp size={30} />} title="Nenhum jogador disponível" text="Cadastre jogadores e encerre partidas para acompanhar a evolução." /></article> : <><div className="summary-strip evolution-summary"><Summary icon={<CalendarDays size={20} />} label="Presenças no mês" value={evolutionGames.length} /><Summary icon={<Goal size={20} />} label="Gols ou pontos" value={evolutionPoints} /><Summary icon={<Sparkles size={20} />} label="Assistências" value={evolutionAssists} /><Summary icon={<TrendingUp size={20} />} label="Média por partida" value={evolutionAverage.toFixed(1)} /></div><div className="evolution-grid"><article className="evolution-profile-card"><ProfileAvatar name={evolutionPlayer.name} large /><div><span className="eyebrow">NÍVEL GERAL</span><h2>{evolutionPlayer.name}</h2><Stars rating={playerStats.get(evolutionPlayer.id)?.rating || ratingFromAverage(evolutionAverage, evolutionGames.length)} label="Nível geral do jogador" /><p>{playerStats.get(evolutionPlayer.id)?.label || ratingLabel(ratingFromAverage(evolutionAverage, evolutionGames.length))}</p></div></article><article className="evolution-chart-card"><header><div><span className="eyebrow">POR PARTIDA</span><h2>Produção no mês</h2></div></header>{evolutionGames.length === 0 ? <Empty icon={<BarChart3 size={28} />} title="Sem partidas neste mês" text="As presenças e o desempenho aparecerão depois de uma partida salva." /> : <div className="evolution-game-list">{evolutionGames.map(({ game, points, assists, rating }) => <div className="evolution-game-row" key={game.id}><div><strong>{new Date(game.finishedAt || game.date).toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}</strong><small>{game.sport}</small></div><div className="performance-bars"><span style={{ "--bar": `${Math.min(100, points * 20)}%` }}><i />{points} {scoreWord(game.sport, points)}</span><span className="assist-bar" style={{ "--bar": `${Math.min(100, assists * 25)}%` }}><i />{assists} assist.</span></div><Stars rating={rating} label={`Nível da partida: ${rating} estrelas`} /></div>)}</div>}</article></div></>}
+        </section>}
+
+        {view === "training" && <section className="training-view">
+          <div className="section-heading settings-heading"><div><span className="eyebrow">PREPARAÇÃO FÍSICA</span><h1>Modo treino</h1><p>Monte rotinas por tempo ou repetições, organize os dias e registre o que foi concluído.</p></div><Dumbbell size={29} /></div>
+          {settingsMessage && <p className="settings-message" role="status">{settingsMessage}</p>}
+          {activeTraining && activeExercise ? <article className="active-training-card"><header><div><span className="live-label">TREINO EM ANDAMENTO</span><h2>{activeTraining.name}</h2><p>Exercício {activeTraining.currentIndex + 1} de {activeTraining.exercises.length}</p></div><button className="text-button danger-text" onClick={cancelTraining}>Encerrar treino</button></header><div className="active-exercise"><span className="exercise-icon"><Dumbbell size={28} /></span><div><small>{activeExercise.mode === "time" ? "EXERCÍCIO CRONOMETRADO" : "EXERCÍCIO POR REPETIÇÕES"}</small><h3>{activeExercise.name}</h3></div>{activeExercise.mode === "time" ? <strong className={activeTraining.remainingSeconds === 0 ? "finished" : ""}>{formatTime(activeTraining.remainingSeconds)}</strong> : <strong>{activeExercise.target}<small> repetições</small></strong>}</div>{activeExercise.mode === "time" && <div className="training-timer-actions"><button className="button timer-button" onClick={toggleTrainingTimer}>{activeTraining.running ? <CirclePause size={18} /> : <CirclePlay size={18} />}{activeTraining.running ? "Pausar" : "Iniciar"}</button><button className="icon-button" onClick={resetTrainingTimer}><RotateCcw size={17} /></button></div>}<div className="training-progress"><i style={{ width: `${(activeTraining.currentIndex / activeTraining.exercises.length) * 100}%` }} /></div><button className="button primary large full" onClick={completeTrainingExercise}><Check size={18} /> {activeTraining.currentIndex + 1 === activeTraining.exercises.length ? "Concluir e registrar treino" : "Concluir exercício e avançar"}</button></article> : <div className="training-layout"><article className="settings-card training-builder"><header><span><Plus size={20} /></span><div><h2>Criar treino</h2><p>Adicione exercícios e escolha os dias planejados.</p></div></header><form onSubmit={saveTrainingPlan}><div className="field"><label htmlFor="training-name">Nome do treino</label><input id="training-name" value={trainingName} onChange={(event) => setTrainingName(event.target.value)} placeholder="Ex.: Condicionamento de terça" /></div><fieldset className="day-picker"><legend>Dias do cronograma</legend>{TRAINING_DAYS.map((day) => <button type="button" key={day} className={trainingDays.includes(day) ? "active" : ""} onClick={() => setTrainingDays((current) => current.includes(day) ? current.filter((item) => item !== day) : [...current, day])}>{day}</button>)}</fieldset><div className="exercise-composer"><div className="field grow"><label htmlFor="exercise-name">Exercício</label><input id="exercise-name" value={exerciseDraft.name} onChange={(event) => setExerciseDraft({ ...exerciseDraft, name: event.target.value })} placeholder="Ex.: Agachamento" /></div><div className="field"><label htmlFor="exercise-mode">Controle</label><select id="exercise-mode" value={exerciseDraft.mode} onChange={(event) => setExerciseDraft({ ...exerciseDraft, mode: event.target.value, target: event.target.value === "time" ? 30 : 10 })}><option value="time">Tempo</option><option value="reps">Repetições</option></select></div><div className="field target-field"><label htmlFor="exercise-target">{exerciseDraft.mode === "time" ? "Segundos" : "Repetições"}</label><input id="exercise-target" type="number" min="1" value={exerciseDraft.target} onChange={(event) => setExerciseDraft({ ...exerciseDraft, target: event.target.value })} /></div><button className="icon-button add-exercise" type="button" onClick={addTrainingExercise} aria-label="Adicionar exercício"><Plus size={19} /></button></div>{trainingExercises.length > 0 && <div className="draft-exercises">{trainingExercises.map((exercise, index) => <div key={exercise.id}><b>{index + 1}</b><span><strong>{exercise.name}</strong><small>{exercise.mode === "time" ? `${exercise.target} segundos` : `${exercise.target} repetições`}</small></span><button type="button" onClick={() => setTrainingExercises((current) => current.filter((item) => item.id !== exercise.id))}><X size={15} /></button></div>)}</div>}<button className="button primary large full" disabled={!trainingName.trim() || !trainingExercises.length}><Save size={18} /> Salvar no cronograma</button></form></article><div className="training-side"><article className="settings-card"><header><span><ClipboardList size={20} /></span><div><h2>Meus treinos</h2><p>Escolha uma rotina para começar.</p></div><b>{(data.trainingPlans || []).length}</b></header>{(data.trainingPlans || []).length === 0 ? <Empty icon={<Dumbbell size={28} />} title="Nenhum treino criado" text="Monte sua primeira rotina ao lado." /> : <div className="training-plan-list">{data.trainingPlans.map((plan) => <div className="training-plan" key={plan.id}><div><strong>{plan.name}</strong><small>{plan.exercises.length} exercícios · {plan.days?.length ? plan.days.join(", ") : "sem dias definidos"}</small></div><button className="button primary" onClick={() => startTraining(plan)}><CirclePlay size={16} /> Iniciar</button><button className="icon-button danger" onClick={() => deleteTrainingPlan(plan.id)}><Trash2 size={16} /></button></div>)}</div>}</article><article className="settings-card training-history-card"><header><span><Check size={20} /></span><div><h2>Atividades concluídas</h2><p>Registro dos treinos realizados.</p></div></header>{(data.trainingHistory || []).length === 0 ? <p className="training-empty-text">Nenhum treino concluído ainda.</p> : <div className="training-history">{data.trainingHistory.slice(0, 8).map((training) => <div key={training.id}><Check size={15} /><span><strong>{training.name}</strong><small>{new Date(training.finishedAt).toLocaleDateString("pt-BR")} · {training.exercises.length} exercícios</small></span></div>)}</div>}</article></div></div>}
+        </section>}
+
+        {view === "password" && <section className="password-page"><button className="recovery-back" type="button" onClick={() => setView("setup")}><ArrowLeft size={17} /> Voltar</button><article className="settings-card password-change-card"><span className="auth-lock"><KeyRound size={23} /></span><h1>Trocar senha</h1><p>Confirme a senha atual e informe a nova senha duas vezes.</p>{settingsMessage && <p className="settings-message" role="status">{settingsMessage}</p>}<form onSubmit={changeLoggedPassword}><div className="field"><label htmlFor="current-password">Senha atual</label><input id="current-password" type="password" required autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} /></div><div className="field"><label htmlFor="new-logged-password">Nova senha</label><input id="new-logged-password" type="password" minLength="6" required autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></div><div className="field"><label htmlFor="confirm-logged-password">Repita a nova senha</label><input id="confirm-logged-password" type="password" minLength="6" required autoComplete="new-password" value={confirmNewPassword} onChange={(event) => setConfirmNewPassword(event.target.value)} /></div><button className="button primary large full" disabled={authBusy}><Save size={18} /> {authBusy ? "Validando..." : "Confirmar troca de senha"}</button></form></article></section>}
+
+        {view === "settings" && <section className="settings-view">
+          <div className="section-heading settings-heading"><div><span className="eyebrow">ADMINISTRAÇÃO</span><h1>Configurações</h1><p>Gerencie a conta, os jogadores do ranking e o histórico de partidas.</p></div><Settings size={28} /></div>
+          {settingsMessage && <p className="settings-message" role="status">{settingsMessage}</p>}
+          <article className="settings-card account-settings compact-account"><header><span><UserRound size={20} /></span><div><h2>Perfil da conta</h2><p>Nome e foto exibidos no aplicativo.</p></div></header><div className="settings-profile"><ProfileAvatar name={displayName} src={data.profile?.avatar} large /><div><strong>{displayName}</strong><small>{session.user.email}</small></div><button className="button secondary" onClick={openProfile}><Pencil size={17} /> Editar perfil</button></div></article>
+          <article className="settings-card manage-card"><header><span><Users size={20} /></span><div><h2>Jogadores e ranking</h2><p>Alterar um nome atualiza o cadastro, as escalações e a artilharia. Excluir também remove as pontuações do histórico.</p></div><b>{managedPlayers.length}</b></header>{managedPlayers.length === 0 ? <Empty icon={<Users size={27} />} title="Nenhum jogador cadastrado" text="Os jogadores adicionados aparecerão aqui." /> : <div className="manage-list">{managedPlayers.map((player) => <div className="manage-row" key={player.id}><Avatar name={player.name} />{editingPlayer?.id === player.id ? <input autoFocus value={editingPlayer.name} onChange={(event) => setEditingPlayer({ ...editingPlayer, name: event.target.value })} onKeyDown={(event) => { if (event.key === "Enter") savePlayerName(); if (event.key === "Escape") setEditingPlayer(null); }} aria-label={`Novo nome de ${player.name}`} /> : <div><strong>{player.name}</strong><small>{player.totalPoints} pontos · {player.totalAssists} assistências{player.registered ? ` · nível ${playerStats.get(player.id)?.rating || 1}★` : " · somente no ranking"}</small></div>}<div className="manage-actions">{editingPlayer?.id === player.id ? <><button className="icon-button save-action" onClick={savePlayerName} aria-label="Salvar nome"><Check size={17} /></button><button className="icon-button" onClick={() => setEditingPlayer(null)} aria-label="Cancelar edição"><X size={17} /></button></> : <button className="icon-button" onClick={() => { setEditingPlayer({ id: player.id, name: player.name }); setSettingsMessage(""); }} aria-label={`Editar ${player.name}`}><Pencil size={16} /></button>}<button className="icon-button danger" onClick={() => deletePlayerEverywhere(player)} aria-label={`Excluir ${player.name}`}><Trash2 size={17} /></button></div></div>)}</div>}</article>
+          <article className="settings-card manage-card"><header><span><CalendarDays size={20} /></span><div><h2>Histórico de partidas</h2><p>Edite informações do jogo ou exclua uma partida e suas pontuações.</p></div><b>{data.history.length}</b></header>{data.history.length === 0 ? <Empty icon={<CalendarDays size={27} />} title="Nenhuma partida salva" text="As partidas encerradas aparecerão aqui." /> : <div className="manage-list match-manage-list">{data.history.map((game) => <div className="manage-row match-manage-row" key={game.id}><span className="match-date-badge">{new Date(game.finishedAt || game.date).toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}</span><div><strong>{game.sport}</strong><small>{game.teams?.[0]?.short || "Time 1"} {game.score?.[0] || 0} × {game.score?.[1] || 0} {game.teams?.[1]?.short || "Time 2"} · {(game.events || []).filter((event) => event.type === "goal").length} pontuações registradas</small></div><div className="manage-actions"><button className="icon-button" onClick={() => openMatchEditor(game)} aria-label="Editar partida"><Pencil size={16} /></button><button className="icon-button danger" onClick={() => deleteMatch(game)} aria-label="Excluir partida"><Trash2 size={17} /></button></div></div>)}</div>}</article>
+          <button className="button logout-button" onClick={signOut}><LogOut size={18} /> Sair da conta</button>
         </section>}
       </div>
 
-      {goalTeam !== null && match && <Modal onClose={() => setGoalTeam(null)} icon={<Goal size={25} />} color={match.teams[goalTeam].color} title="Quem fez o gol?" text={`Selecione quem está em jogo pelo ${match.teams[goalTeam].name}.`}><div className="scorer-grid">{match.teams[goalTeam].starters.map((player) => <button key={player.id} onClick={() => registerGoal(goalTeam, player.id)}><Avatar name={player.name} /><strong>{player.name}</strong><ChevronRight size={17} /></button>)}</div></Modal>}
+      {goalTeam !== null && match && <Modal onClose={() => { setGoalTeam(null); setGoalScorer(""); setGoalAssist(""); }} icon={<Goal size={25} />} color={match.teams[goalTeam].color} title="Registrar pontuação" text={`Informe quem marcou e, se houver, quem deu a assistência pelo ${match.teams[goalTeam].name}.`}><div className="goal-fields"><div className="field"><label htmlFor="goal-scorer">Autor</label><select id="goal-scorer" value={goalScorer} onChange={(event) => { setGoalScorer(event.target.value); if (event.target.value === goalAssist) setGoalAssist(""); }}><option value="">Selecione o jogador</option>{match.teams[goalTeam].starters.map((player) => <option key={player.id} value={player.id}>{player.name}</option>)}</select></div><div className="field"><label htmlFor="goal-assist">Assistência (opcional)</label><select id="goal-assist" value={goalAssist} onChange={(event) => setGoalAssist(event.target.value)}><option value="">Sem assistência</option>{match.teams[goalTeam].starters.filter((player) => player.id !== goalScorer).map((player) => <option key={player.id} value={player.id}>{player.name}</option>)}</select></div><button className="button primary large full" disabled={!goalScorer} onClick={() => registerGoal(goalTeam, goalScorer, goalAssist)}><Goal size={18} /> Confirmar pontuação</button></div></Modal>}
       {subTeam !== null && match && <Modal onClose={() => setSubTeam(null)} icon={<ArrowDownUp size={25} />} color={match.teams[subTeam].color} title="Fazer substituição" text={`Escolha quem sai e quem entra no ${match.teams[subTeam].name}.`}><div className="sub-fields"><div className="field"><label htmlFor="player-out">Sai de quadra</label><select id="player-out" value={selectedOut} onChange={(event) => setSelectedOut(event.target.value)}>{match.teams[subTeam].starters.map((player) => <option key={player.id} value={player.id}>{player.name}</option>)}</select></div><ArrowDownUp size={21} /><div className="field"><label htmlFor="player-in">Entra no jogo</label><select id="player-in" value={selectedIn} onChange={(event) => setSelectedIn(event.target.value)}>{match.teams[subTeam].bench.map((player) => <option key={player.id} value={player.id}>{player.name}</option>)}</select></div></div><button className="button primary large full" onClick={confirmSubstitution}>Confirmar troca</button></Modal>}
+      {profileOpen && <Modal onClose={() => setProfileOpen(false)} icon={<UserRound size={25} />} color="green" title="Meu perfil" text="Personalize o nome e a foto exibidos no Resenha."><form className="profile-form" onSubmit={saveProfile}><div className="profile-photo-editor"><ProfileAvatar name={profileName || displayName} src={profileAvatar} large /><div><button className="button secondary" type="button" onClick={() => profileInput.current?.click()}><Camera size={17} /> Escolher foto</button>{profileAvatar && <button className="text-button danger-text" type="button" onClick={() => setProfileAvatar("")}>Remover foto</button>}<small>JPG, PNG ou WebP · máximo 3 MB. A imagem será reduzida para 512 × 512 e até 350 KB.</small></div><input ref={profileInput} type="file" accept="image/jpeg,image/png,image/webp" onChange={selectProfileImage} hidden /></div><div className="field"><label htmlFor="profile-name">Nome exibido</label><input id="profile-name" maxLength="40" required value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="Como deseja aparecer" /></div>{profileMessage && <p className="cloud-message" role="status">{profileMessage}</p>}<button className="button primary large full" disabled={authBusy}><Save size={18} /> {authBusy ? "Salvando..." : "Salvar perfil"}</button></form></Modal>}
+      {editingMatch && <Modal onClose={() => setEditingMatch(null)} icon={<CalendarDays size={25} />} color="green" title="Editar partida" text="A edição do placar corrige o resultado. O ranking continua sendo calculado pelos autores registrados na súmula."><form className="edit-match-form" onSubmit={saveMatchEdit}><div className="two-fields"><div className="field"><label htmlFor="edit-match-date">Data</label><input id="edit-match-date" type="date" required value={editingMatch.date} onChange={(event) => setEditingMatch({ ...editingMatch, date: event.target.value })} /></div><div className="field"><label htmlFor="edit-match-sport">Esporte</label><select id="edit-match-sport" value={editingMatch.sport} onChange={(event) => setEditingMatch({ ...editingMatch, sport: event.target.value })}>{Object.keys(startersBySport).map((sport) => <option key={sport}>{sport}</option>)}</select></div></div><div className="edit-score-fields"><div className="field"><label htmlFor="edit-score-one">Time 1</label><input id="edit-score-one" type="number" min="0" value={editingMatch.score0} onChange={(event) => setEditingMatch({ ...editingMatch, score0: event.target.value })} /></div><b>×</b><div className="field"><label htmlFor="edit-score-two">Time 2</label><input id="edit-score-two" type="number" min="0" value={editingMatch.score1} onChange={(event) => setEditingMatch({ ...editingMatch, score1: event.target.value })} /></div></div><button className="button primary large full"><Save size={18} /> Salvar alterações</button></form></Modal>}
       {cloudOpen && <Modal onClose={() => setCloudOpen(false)} icon={<Cloud size={25} />} color="green" title="Conta e sincronização" text="Estes jogadores e históricos pertencem somente a esta conta. Uma cópia também fica protegida neste aparelho para continuar funcionando durante quedas de conexão.">
         <div className="cloud-account">
           <div className="account-line"><span><Cloud size={20} /><span><small>Conta conectada</small><strong>{session.user.email}</strong></span></span><b className={`sync-badge ${syncStatus}`}>{syncLabel}</b></div>
@@ -460,29 +956,47 @@ function ThemeToggle({ theme, setTheme, className = "" }) {
   return <button className={`icon-button theme-button ${className}`} onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")} aria-label={theme === "dark" ? "Ativar modo claro" : "Ativar modo escuro"}>{theme === "dark" ? <Sun size={19} /> : <Moon size={19} />}</button>;
 }
 
-function AuthScreen({ mode, setMode, email, setEmail, password, setPassword, showPassword, setShowPassword, message, busy, onSubmit, theme, setTheme }) {
+function AuthScreen({ mode, setMode, email, setEmail, password, setPassword, showPassword, setShowPassword, message, busy, onSubmit, onForgot, theme, setTheme }) {
   return <main className="auth-page">
     <ThemeToggle theme={theme} setTheme={setTheme} className="auth-theme" />
     <section className="auth-hero">
-      <div className="auth-brand"><span className="brand-mark"><Goal size={27} /></span><span><strong>Pelada da Semana</strong><small>Organização completa do jogo</small></span></div>
-      <div className="auth-copy"><span className="eyebrow">SEU FUTEBOL, SEUS DADOS</span><h1>Da escalação até a artilharia do mês.</h1><p>Monte os times, controle o placar e guarde cada resultado em um espaço exclusivo da sua conta.</p></div>
-      <div className="auth-benefits"><span><ShieldCheck size={19} /> Informações separadas por conta</span><span><Cloud size={19} /> Histórico sincronizado entre aparelhos</span><span><Trophy size={19} /> Artilharia mensal sempre atualizada</span></div>
+      <div className="auth-brand"><span className="brand-mark"><Goal size={27} /></span><span><strong>Resenha</strong><small>Organização completa do jogo</small></span></div>
+      <div className="auth-copy"><h1>Organize o jogo. Viva a resenha.</h1><p>Times equilibrados, placar ao vivo e desempenho em um só lugar.</p></div>
     </section>
     <section className="auth-panel">
       <div className="auth-card">
         <span className="auth-lock"><LockKeyhole size={23} /></span>
         <h2>{mode === "signup" ? "Criar uma conta" : "Entrar no aplicativo"}</h2>
-        <p>{mode === "signup" ? "Crie um acesso para cadastrar seus jogadores e começar o histórico." : "Use seu acesso para abrir jogadores, partidas e artilharia."}</p>
         <div className="auth-tabs"><button type="button" className={mode === "signin" ? "active" : ""} onClick={() => setMode("signin")}>Entrar</button><button type="button" className={mode === "signup" ? "active" : ""} onClick={() => setMode("signup")}>Criar conta</button></div>
         <form className="auth-form" onSubmit={onSubmit}>
           <div className="field"><label htmlFor="login-email">E-mail</label><div className="auth-input"><Mail size={18} /><input id="login-email" type="email" required autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="nome@email.com" /></div></div>
           <div className="field"><label htmlFor="login-password">Senha</label><div className="auth-input"><LockKeyhole size={18} /><input id="login-password" type={showPassword ? "text" : "password"} minLength="6" required autoComplete={mode === "signup" ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Mínimo de 6 caracteres" /><button type="button" onClick={() => setShowPassword((current) => !current)} aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"}>{showPassword ? <EyeOff size={18} /> : <Eye size={18} />}</button></div></div>
+          {mode === "signin" && <button className="forgot-button" type="button" onClick={onForgot} disabled={busy}>Esqueci minha senha</button>}
           {message && <p className="auth-message" role="status">{message}</p>}
           <button className="button primary large full" disabled={busy}>{busy ? "Aguarde..." : mode === "signup" ? "Criar minha conta" : "Entrar"}<ChevronRight size={19} /></button>
         </form>
-        <small className="auth-privacy"><Shield size={14} /> Cada conta acessa somente os próprios dados.</small>
       </div>
     </section>
+  </main>;
+}
+
+function PasswordRecoveryScreen({ password, setPassword, confirm, setConfirm, message, busy, onSubmit, onBack, theme, setTheme }) {
+  return <main className="auth-page recovery-page">
+    <ThemeToggle theme={theme} setTheme={setTheme} className="auth-theme" />
+    <section className="auth-hero">
+      <div className="auth-brand"><span className="brand-mark"><Goal size={27} /></span><span><strong>Resenha</strong><small>Recuperação de acesso</small></span></div>
+      <div className="auth-copy"><h1>Crie uma nova senha.</h1><p>Escolha uma senha segura para voltar ao seu grupo.</p></div>
+    </section>
+    <section className="auth-panel"><div className="auth-card">
+      <button className="recovery-back" type="button" onClick={onBack}><ArrowLeft size={17} /> Voltar ao login</button>
+      <span className="auth-lock"><LockKeyhole size={23} /></span><h2>Redefinir senha</h2>
+      <form className="auth-form" onSubmit={onSubmit}>
+        <div className="field"><label htmlFor="new-password">Nova senha</label><div className="auth-input"><LockKeyhole size={18} /><input id="new-password" type="password" minLength="6" required autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Mínimo de 6 caracteres" /></div></div>
+        <div className="field"><label htmlFor="confirm-password">Confirmar nova senha</label><div className="auth-input"><LockKeyhole size={18} /><input id="confirm-password" type="password" minLength="6" required autoComplete="new-password" value={confirm} onChange={(event) => setConfirm(event.target.value)} placeholder="Digite novamente" /></div></div>
+        {message && <p className="auth-message" role="status">{message}</p>}
+        <button className="button primary large full" disabled={busy}>{busy ? "Salvando..." : "Salvar nova senha"}<ChevronRight size={19} /></button>
+      </form>
+    </div></section>
   </main>;
 }
 
@@ -494,6 +1008,9 @@ function AuthSetupRequired({ theme, setTheme }) {
 }
 
 function Avatar({ name }) { return <span className="avatar">{name.slice(0, 2).toUpperCase()}</span>; }
+function ProfileAvatar({ name, src, large = false }) { return <span className={`profile-avatar ${large ? "large" : ""}`}>{src ? <img src={src} alt="" /> : name.slice(0, 2).toUpperCase()}</span>; }
+function Stars({ rating, label }) { return <span className="rating-stars" aria-label={label}>{[1, 2, 3, 4, 5].map((star) => <i key={star} className={star <= rating ? "filled" : ""}>★</i>)}</span>; }
+function Pagination({ page, pageCount, onChange }) { return <nav className="pagination" aria-label="Páginas de jogadores"><button type="button" onClick={() => onChange(Math.max(1, page - 1))} disabled={page === 1} aria-label="Página anterior"><ChevronLeft size={18} /></button>{Array.from({ length: pageCount }, (_, index) => index + 1).map((number) => <button type="button" key={number} className={number === page ? "active" : ""} onClick={() => onChange(number)} aria-current={number === page ? "page" : undefined}>{number}</button>)}<button type="button" onClick={() => onChange(Math.min(pageCount, page + 1))} disabled={page === pageCount} aria-label="Próxima página"><ChevronRight size={18} /></button></nav>; }
 function Empty({ icon, title, text }) { return <div className="empty-state">{icon}<strong>{title}</strong><span>{text}</span></div>; }
 function Mode({ active, onClick, icon, title, text }) { return <button type="button" className={active ? "mode active" : "mode"} onClick={onClick}><span>{icon}</span><div><strong>{title}</strong><small>{text}</small></div>{active && <Check size={18} />}</button>; }
 function Summary({ icon, label, value }) { return <div><span>{icon}</span><p><small>{label}</small><strong>{value}</strong></p></div>; }

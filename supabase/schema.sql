@@ -6,6 +6,7 @@ create table if not exists public.app_state (
 
 alter table public.app_state enable row level security;
 
+revoke all on table public.app_state from anon;
 grant select, insert, update, delete on public.app_state to authenticated;
 
 drop policy if exists "Usuario le os proprios dados" on public.app_state;

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, ArrowDownUp, ArrowLeft, BarChart3, CalendarDays, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, CirclePause, CirclePlay, ClipboardList, Clock3, Cloud, CloudOff, Download, Dumbbell, Eye, EyeOff, Goal, KeyRound, LockKeyhole, LogOut, Mail, Medal, Menu, Moon, Pencil, Plus, RefreshCw, RotateCcw, Save, Settings, Shield, Sparkles, Sun, Trash2, TrendingUp, Trophy, Upload, UserPlus, UserRound, Users, X } from "lucide-react";
+import { Activity, ArrowDownUp, ArrowLeft, BarChart3, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, CirclePause, CirclePlay, ClipboardList, Clock3, Cloud, CloudOff, Download, Dumbbell, Eye, EyeOff, Goal, KeyRound, LockKeyhole, LogOut, Mail, Medal, Menu, Moon, Pencil, Plus, RefreshCw, RotateCcw, Save, Settings, Shield, Sparkles, Sun, Trash2, TrendingUp, Trophy, Upload, UserPlus, UserRound, Users, X } from "lucide-react";
 import { supabase, supabaseConfigured } from "./supabase";
 
 const LEGACY_STORAGE_KEY = "pelada-da-semana-v4";
@@ -12,51 +12,52 @@ const TEAM_META = [
   { name: "Time Azul", short: "AZL", color: "blue" },
   { name: "Time Laranja", short: "LRJ", color: "orange" },
 ];
-const startersBySport = { Futebol: 11, Futsal: 5, Vôlei: 6, Basquete: 5, Handebol: 7 };
-const initialState = { profile: { displayName: "", avatar: "" }, players: [], settings: { sport: "Futsal", duration: 20, startersPerTeam: 5, drawMode: "balanced", attendanceIds: [] }, activeMatch: null, history: [], trainingPlans: [], trainingHistory: [], activeTraining: null };
+const SPORT_PRESETS = {
+  "Futebol": { players: 11, duration: 20 },
+  "Futebol Society": { players: 5, duration: 10 },
+  "Futebol de Salão": { players: 5, duration: 10 },
+  "Vôlei": { players: 2, duration: 15 },
+  "Basquete": { players: 5, duration: 10 },
+  "Handebol": { players: 7, duration: 20 },
+};
+const initialState = { profile: { displayName: "" }, players: [], settings: { sport: "Futebol de Salão", duration: 10, startersPerTeam: 5, drawMode: "balanced", attendanceIds: [] }, activeMatch: null, history: [], trainingPlans: [], trainingHistory: [], activeTraining: null };
 const uid = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const thisMonth = () => new Date().toLocaleDateString("sv-SE").slice(0, 7);
 const monthKey = (date) => new Date(date).toLocaleDateString("sv-SE").slice(0, 7);
-const formatTime = (seconds) => `${String(Math.floor(Math.max(0, seconds) / 60)).padStart(2, "0")}:${String(Math.max(0, seconds) % 60).padStart(2, "0")}`;
+const formatTime = (seconds) => {
+  const safe = Math.max(0, seconds);
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+  const clock = `${String(minutes).padStart(2, "0")}:${String(safe % 60).padStart(2, "0")}`;
+  return hours ? `${String(hours).padStart(2, "0")}:${clock}` : clock;
+};
 const minuteOf = (match) => Math.max(1, Math.ceil((match.durationSeconds - match.remainingSeconds) / 60));
 const PLAYER_PAGE_SIZE = 10;
 const TRAINING_DAYS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
-const scoreWord = (sport, amount = 2) => ["Basquete", "Vôlei"].includes(sport) ? (amount === 1 ? "ponto" : "pontos") : (amount === 1 ? "gol" : "gols");
-
-function optimizeProfileImage(file) {
-  const MAX_INPUT_SIZE = 3 * 1024 * 1024;
-  const MAX_OUTPUT_SIZE = 350 * 1024;
-  if (!file?.type.startsWith("image/")) return Promise.reject(new Error("Selecione uma imagem JPG, PNG ou WebP."));
-  if (file.size > MAX_INPUT_SIZE) return Promise.reject(new Error("A imagem original deve ter no máximo 3 MB."));
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error("Não foi possível ler a imagem."));
-    reader.onload = () => {
-      const image = new Image();
-      image.onerror = () => reject(new Error("O arquivo de imagem não é válido."));
-      image.onload = () => {
-        const size = Math.min(image.naturalWidth, image.naturalHeight);
-        const canvas = document.createElement("canvas");
-        canvas.width = 512;
-        canvas.height = 512;
-        const context = canvas.getContext("2d");
-        const sourceX = (image.naturalWidth - size) / 2;
-        const sourceY = (image.naturalHeight - size) / 2;
-        context.drawImage(image, sourceX, sourceY, size, size, 0, 0, 512, 512);
-        let quality = 0.82;
-        let output = canvas.toDataURL("image/jpeg", quality);
-        while (Math.ceil(output.length * 0.75) > MAX_OUTPUT_SIZE && quality > 0.42) {
-          quality -= 0.08;
-          output = canvas.toDataURL("image/jpeg", quality);
-        }
-        if (Math.ceil(output.length * 0.75) > MAX_OUTPUT_SIZE) reject(new Error("Não foi possível reduzir a imagem para o limite de 350 KB."));
-        else resolve(output);
-      };
-      image.src = reader.result;
-    };
-    reader.readAsDataURL(file);
-  });
-}
+const canonicalSport = (sport) => sport === "Futsal" ? "Futebol de Salão" : sport;
+const sportKind = (sport) => ["Futebol", "Futebol Society", "Futebol de Salão"].includes(canonicalSport(sport)) ? "football" : canonicalSport(sport) === "Vôlei" ? "volleyball" : canonicalSport(sport) === "Basquete" ? "basketball" : "other";
+const scoreWord = (sport, amount = 2) => sportKind(sport) === "basketball" ? (amount === 1 ? "cesta" : "cestas") : sportKind(sport) === "volleyball" ? (amount === 1 ? "ponto" : "pontos") : (amount === 1 ? "gol" : "gols");
+const scoreAction = (sport) => sportKind(sport) === "basketball" ? "Cesta" : sportKind(sport) === "volleyball" ? "Ponto" : "Gol";
+const exerciseSeconds = (exercise) => {
+  if (exercise.mode !== "time") return 0;
+  if (exercise.targetSeconds) return Number(exercise.targetSeconds);
+  const multiplier = exercise.unit === "hours" ? 3600 : exercise.unit === "minutes" ? 60 : 1;
+  return Math.max(1, Number(exercise.target) || 1) * multiplier;
+};
+const exerciseTargetLabel = (exercise) => {
+  if (exercise.mode === "reps") return `${exercise.target} repetições`;
+  const seconds = exerciseSeconds(exercise);
+  if (exercise.unit === "hours") return `${exercise.target} ${Number(exercise.target) === 1 ? "hora" : "horas"}`;
+  if (exercise.unit === "minutes") return `${exercise.target} ${Number(exercise.target) === 1 ? "minuto" : "minutos"}`;
+  return `${seconds} ${seconds === 1 ? "segundo" : "segundos"}`;
+};
+const formatTrainingDuration = (seconds) => {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (hours) return `${hours}h ${minutes}min`;
+  if (minutes) return `${minutes} min`;
+  return `${seconds} s`;
+};
 
 function ratingFromAverage(average, matches) {
   if (!matches || average < 0.25) return 1;
@@ -125,11 +126,25 @@ function removePlayerFromMatch(match, playerId) {
   return { ...match, teams, events, score };
 }
 
+function normalizeState(raw) {
+  const saved = raw && typeof raw === "object" ? raw : {};
+  return {
+    ...initialState,
+    ...saved,
+    profile: { displayName: String(saved.profile?.displayName || "").slice(0, 40) },
+    settings: { ...initialState.settings, ...(saved.settings || {}) },
+    players: Array.isArray(saved.players) ? saved.players : [],
+    history: Array.isArray(saved.history) ? saved.history : [],
+    trainingPlans: Array.isArray(saved.trainingPlans) ? saved.trainingPlans : [],
+    trainingHistory: Array.isArray(saved.trainingHistory) ? saved.trainingHistory : [],
+  };
+}
+
 function readSaved(key) {
   if (typeof window === "undefined") return initialState;
   try {
     const saved = JSON.parse(localStorage.getItem(key));
-    return saved ? { ...initialState, ...saved } : initialState;
+    return saved ? normalizeState(saved) : initialState;
   } catch {
     return initialState;
   }
@@ -188,15 +203,14 @@ export default function Home() {
   const [selectedOut, setSelectedOut] = useState("");
   const [selectedIn, setSelectedIn] = useState("");
   const [month, setMonth] = useState(thisMonth());
+  const [statsSport, setStatsSport] = useState("Futebol de Salão");
   const [theme, setTheme] = useState(() => localStorage.getItem(THEME_KEY) || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
   const [session, setSession] = useState(null);
   const [authReady, setAuthReady] = useState(false);
-  const [cloudOpen, setCloudOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [appMenuOpen, setAppMenuOpen] = useState(false);
   const [profileName, setProfileName] = useState("");
-  const [profileAvatar, setProfileAvatar] = useState("");
   const [profileMessage, setProfileMessage] = useState("");
   const [editingPlayer, setEditingPlayer] = useState(null);
   const [editingMatch, setEditingMatch] = useState(null);
@@ -209,9 +223,10 @@ export default function Home() {
   const [evolutionPlayerId, setEvolutionPlayerId] = useState("");
   const [evolutionMonth, setEvolutionMonth] = useState(thisMonth());
   const [trainingName, setTrainingName] = useState("");
+  const [trainingStatsMonth, setTrainingStatsMonth] = useState(thisMonth());
   const [trainingDays, setTrainingDays] = useState([]);
   const [trainingExercises, setTrainingExercises] = useState([]);
-  const [exerciseDraft, setExerciseDraft] = useState({ name: "", mode: "time", target: 30 });
+  const [exerciseDraft, setExerciseDraft] = useState({ name: "", mode: "time", target: 30, unit: "seconds" });
   const [authMode, setAuthMode] = useState("signin");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
@@ -224,7 +239,6 @@ export default function Home() {
   const [syncStatus, setSyncStatus] = useState(supabaseConfigured ? "offline" : "local");
   const nameInput = useRef(null);
   const importInput = useRef(null);
-  const profileInput = useRef(null);
   const profileMenuRef = useRef(null);
   const appMenuRef = useRef(null);
   const dataRef = useRef(initialState);
@@ -268,6 +282,15 @@ export default function Home() {
   const evolutionPoints = evolutionGames.reduce((sum, item) => sum + item.points, 0);
   const evolutionAssists = evolutionGames.reduce((sum, item) => sum + item.assists, 0);
   const evolutionAverage = evolutionGames.length ? evolutionPoints / evolutionGames.length : 0;
+  const trainingMonthSessions = useMemo(() => (data.trainingHistory || []).filter((training) => monthKey(training.finishedAt) === trainingStatsMonth), [data.trainingHistory, trainingStatsMonth]);
+  const trainingCompletedExercises = trainingMonthSessions.flatMap((training) => training.exercises || []).filter((exercise) => exercise.completed || exercise.completedAt);
+  const trainingTimeSeconds = trainingCompletedExercises.filter((exercise) => exercise.mode === "time").reduce((sum, exercise) => sum + exerciseSeconds(exercise), 0);
+  const trainingRepetitions = trainingCompletedExercises.filter((exercise) => exercise.mode === "reps").reduce((sum, exercise) => sum + (Number(exercise.target) || 0), 0);
+  const trainingPlanRanking = useMemo(() => {
+    const totals = new Map();
+    trainingMonthSessions.forEach((training) => totals.set(training.name, (totals.get(training.name) || 0) + 1));
+    return [...totals.entries()].sort((a, b) => b[1] - a[1]);
+  }, [trainingMonthSessions]);
 
   useEffect(() => {
     const closeMenu = (event) => {
@@ -304,6 +327,10 @@ export default function Home() {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem(THEME_KEY, theme);
   }, [theme]);
+
+  useEffect(() => {
+    setStatsSport(canonicalSport(data.settings.sport));
+  }, [data.settings.sport]);
 
   useEffect(() => {
     if (!supabaseConfigured) {
@@ -363,10 +390,12 @@ export default function Home() {
         return;
       }
       if (cloudRow?.data) {
-        const cloudData = { ...initialState, ...cloudRow.data };
+        const removedLegacyAvatar = Boolean(cloudRow.data.profile?.avatar);
+        const cloudData = normalizeState(cloudRow.data);
         setData(cloudData);
         dataRef.current = cloudData;
         if (cloudData.activeMatch) setView("match");
+        dirtyRef.current = removedLegacyAvatar;
       } else {
         const { error: uploadError } = await supabase.from("app_state").upsert({ user_id: session.user.id, data: dataRef.current, updated_at: new Date().toISOString() });
         if (uploadError) {
@@ -376,7 +405,7 @@ export default function Home() {
         }
       }
       cloudLoadedUser.current = session.user.id;
-      dirtyRef.current = false;
+      if (!cloudRow?.data?.profile?.avatar) dirtyRef.current = false;
       setSyncStatus("synced");
     };
     loadCloud();
@@ -419,19 +448,26 @@ export default function Home() {
   }, [data.activeMatch?.running]);
 
   useEffect(() => {
-    if (!data.activeTraining?.running || data.activeTraining.remainingSeconds <= 0) return;
+    if (!data.activeTraining?.runningExerciseId) return;
     const timer = window.setInterval(() => {
       setData((current) => {
-        if (!current.activeTraining?.running) return current;
-        const next = Math.max(0, current.activeTraining.remainingSeconds - 1);
-        return { ...current, activeTraining: { ...current.activeTraining, remainingSeconds: next, running: next > 0 } };
+        const training = current.activeTraining;
+        if (!training?.runningExerciseId) return current;
+        let finished = false;
+        const exercises = training.exercises.map((exercise) => {
+          if (exercise.id !== training.runningExerciseId) return exercise;
+          const remainingSeconds = Math.max(0, (exercise.remainingSeconds ?? exerciseSeconds(exercise)) - 1);
+          if (remainingSeconds === 0) finished = true;
+          return { ...exercise, remainingSeconds };
+        });
+        return { ...current, activeTraining: { ...training, exercises, runningExerciseId: finished ? null : training.runningExerciseId } };
       });
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [data.activeTraining?.running]);
+  }, [data.activeTraining?.runningExerciseId]);
 
   const addPlayer = useCallback((rawName = playerName) => {
-    const name = String(rawName).trim();
+    const name = String(rawName).trim().slice(0, 60);
     if (!name) return { ok: false, error: "Informe o nome do jogador." };
     if (data.players.some((player) => player.name.toLowerCase() === name.toLowerCase())) return { ok: false, error: "Este jogador já está na lista." };
     const player = { id: uid(), name };
@@ -489,8 +525,11 @@ export default function Home() {
   }, [addPlayer, registerGoal, startMatch]);
 
   const updateSettings = (field, value) => setData((current) => ({ ...current, settings: { ...current.settings, [field]: value } }));
-  const changeSport = (sport) => setData((current) => ({ ...current, settings: { ...current.settings, sport, startersPerTeam: startersBySport[sport] } }));
-  const removePlayer = (id) => setData((current) => ({ ...current, players: current.players.filter((player) => player.id !== id), settings: { ...current.settings, attendanceIds: Array.isArray(current.settings.attendanceIds) ? current.settings.attendanceIds.filter((playerId) => playerId !== id) : current.settings.attendanceIds } }));
+  const changeSport = (sport) => {
+    const preset = SPORT_PRESETS[sport];
+    setData((current) => ({ ...current, settings: { ...current.settings, sport, startersPerTeam: preset.players, duration: preset.duration } }));
+    setStatsSport(sport);
+  };
   const toggleAttendance = (playerId) => setData((current) => {
     const currentIds = Array.isArray(current.settings.attendanceIds) ? current.settings.attendanceIds : current.players.map((player) => player.id);
     const attendanceIds = currentIds.includes(playerId) ? currentIds.filter((id) => id !== playerId) : [...currentIds, playerId];
@@ -547,8 +586,8 @@ export default function Home() {
     const name = exerciseDraft.name.trim();
     const target = Math.max(1, Number(exerciseDraft.target) || 1);
     if (!name) return;
-    setTrainingExercises((current) => [...current, { id: uid(), name, mode: exerciseDraft.mode, target }]);
-    setExerciseDraft({ name: "", mode: exerciseDraft.mode, target: exerciseDraft.mode === "time" ? 30 : 10 });
+    setTrainingExercises((current) => [...current, { id: uid(), name, mode: exerciseDraft.mode, target, unit: exerciseDraft.mode === "time" ? exerciseDraft.unit : null }]);
+    setExerciseDraft({ name: "", mode: exerciseDraft.mode, target: exerciseDraft.mode === "time" ? 30 : 10, unit: exerciseDraft.unit });
   };
 
   const saveTrainingPlan = (event) => {
@@ -567,30 +606,32 @@ export default function Home() {
   };
 
   const startTraining = (plan) => {
-    const first = plan.exercises[0];
-    setData((current) => ({ ...current, activeTraining: { id: uid(), planId: plan.id, name: plan.name, exercises: plan.exercises, currentIndex: 0, remainingSeconds: first.mode === "time" ? first.target : 0, running: false, completed: [], startedAt: new Date().toISOString() } }));
+    const exercises = plan.exercises.map((exercise) => ({ ...exercise, completed: false, remainingSeconds: exerciseSeconds(exercise) }));
+    setData((current) => ({ ...current, activeTraining: { id: uid(), planId: plan.id, name: plan.name, exercises, runningExerciseId: null, startedAt: new Date().toISOString() } }));
     setView("training");
   };
 
-  const completeTrainingExercise = () => setData((current) => {
+  const toggleTrainingExerciseDone = (exerciseId) => setData((current) => {
+    if (!current.activeTraining) return current;
+    const exercises = current.activeTraining.exercises.map((exercise) => exercise.id === exerciseId ? { ...exercise, completed: !exercise.completed, completedAt: !exercise.completed ? new Date().toISOString() : null } : exercise);
+    return { ...current, activeTraining: { ...current.activeTraining, exercises, runningExerciseId: current.activeTraining.runningExerciseId === exerciseId ? null : current.activeTraining.runningExerciseId } };
+  });
+  const toggleTrainingTimer = (exerciseId) => setData((current) => {
+    const training = current.activeTraining;
+    const exercise = training?.exercises.find((item) => item.id === exerciseId);
+    if (!training || !exercise || exercise.completed || (exercise.remainingSeconds ?? 0) <= 0) return current;
+    return { ...current, activeTraining: { ...training, runningExerciseId: training.runningExerciseId === exerciseId ? null : exerciseId } };
+  });
+  const resetTrainingTimer = (exerciseId) => setData((current) => {
+    if (!current.activeTraining) return current;
+    const exercises = current.activeTraining.exercises.map((exercise) => exercise.id === exerciseId ? { ...exercise, remainingSeconds: exerciseSeconds(exercise) } : exercise);
+    return { ...current, activeTraining: { ...current.activeTraining, exercises, runningExerciseId: current.activeTraining.runningExerciseId === exerciseId ? null : current.activeTraining.runningExerciseId } };
+  });
+  const finishTraining = () => setData((current) => {
     const training = current.activeTraining;
     if (!training) return current;
-    const exercise = training.exercises[training.currentIndex];
-    const completed = [...training.completed, { exerciseId: exercise.id, name: exercise.name, mode: exercise.mode, target: exercise.target, completedAt: new Date().toISOString() }];
-    const nextIndex = training.currentIndex + 1;
-    if (nextIndex >= training.exercises.length) {
-      const finished = { id: training.id, planId: training.planId, name: training.name, startedAt: training.startedAt, finishedAt: new Date().toISOString(), exercises: completed };
-      return { ...current, activeTraining: null, trainingHistory: [finished, ...(current.trainingHistory || [])] };
-    }
-    const next = training.exercises[nextIndex];
-    return { ...current, activeTraining: { ...training, currentIndex: nextIndex, remainingSeconds: next.mode === "time" ? next.target : 0, running: false, completed } };
-  });
-
-  const toggleTrainingTimer = () => setData((current) => !current.activeTraining || current.activeTraining.remainingSeconds === 0 ? current : ({ ...current, activeTraining: { ...current.activeTraining, running: !current.activeTraining.running } }));
-  const resetTrainingTimer = () => setData((current) => {
-    if (!current.activeTraining) return current;
-    const exercise = current.activeTraining.exercises[current.activeTraining.currentIndex];
-    return { ...current, activeTraining: { ...current.activeTraining, remainingSeconds: exercise.mode === "time" ? exercise.target : 0, running: false } };
+    const finished = { id: training.id, planId: training.planId, name: training.name, startedAt: training.startedAt, finishedAt: new Date().toISOString(), exercises: training.exercises };
+    return { ...current, activeTraining: null, trainingHistory: [finished, ...(current.trainingHistory || [])] };
   });
   const cancelTraining = () => {
     if (!window.confirm("Encerrar este treino sem registrar os exercícios restantes?")) return;
@@ -601,21 +642,24 @@ export default function Home() {
     setData((current) => ({ ...current, trainingPlans: (current.trainingPlans || []).filter((plan) => plan.id !== planId) }));
   };
 
-  const monthMatches = useMemo(() => data.history.filter((match) => monthKey(match.finishedAt || match.date) === month), [data.history, month]);
-  const ranking = useMemo(() => {
-    const goals = new Map();
+  const monthMatches = useMemo(() => data.history.filter((match) => monthKey(match.finishedAt || match.date) === month && canonicalSport(match.sport) === canonicalSport(statsSport)), [data.history, month, statsSport]);
+  const rankingData = useMemo(() => {
+    const players = new Map();
     monthMatches.forEach((match) => match.events.filter((event) => event.type === "goal").forEach((event) => {
-      const item = goals.get(event.playerId) || { id: event.playerId, name: event.playerName, goals: 0, assists: 0 };
+      const item = players.get(event.playerId) || { id: event.playerId, name: event.playerName, goals: 0, assists: 0 };
       item.goals += 1;
-      goals.set(event.playerId, item);
+      players.set(event.playerId, item);
       if (event.assistPlayerId) {
-        const assistant = goals.get(event.assistPlayerId) || { id: event.assistPlayerId, name: event.assistPlayerName, goals: 0, assists: 0 };
+        const assistant = players.get(event.assistPlayerId) || { id: event.assistPlayerId, name: event.assistPlayerName, goals: 0, assists: 0 };
         assistant.assists += 1;
-        goals.set(event.assistPlayerId, assistant);
+        players.set(event.assistPlayerId, assistant);
       }
     }));
-    return [...goals.values()].sort((a, b) => b.goals - a.goals || a.name.localeCompare(b.name));
+    return [...players.values()].map((player) => ({ ...player, total: player.goals + player.assists }));
   }, [monthMatches]);
+  const generalRanking = useMemo(() => [...rankingData].sort((a, b) => b.total - a.total || b.goals - a.goals || a.name.localeCompare(b.name)), [rankingData]);
+  const goalsRanking = useMemo(() => [...rankingData].filter((player) => player.goals > 0).sort((a, b) => b.goals - a.goals || a.name.localeCompare(b.name)), [rankingData]);
+  const assistsRanking = useMemo(() => [...rankingData].filter((player) => player.assists > 0).sort((a, b) => b.assists - a.assists || a.name.localeCompare(b.name)), [rankingData]);
 
   const submitAuth = async (event) => {
     event.preventDefault();
@@ -679,23 +723,9 @@ export default function Home() {
 
   const openProfile = () => {
     setProfileName(displayName);
-    setProfileAvatar(data.profile?.avatar || "");
     setProfileMessage("");
     setProfileMenuOpen(false);
     setProfileOpen(true);
-  };
-
-  const selectProfileImage = async (event) => {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (!file) return;
-    setProfileMessage("Processando imagem...");
-    try {
-      setProfileAvatar(await optimizeProfileImage(file));
-      setProfileMessage("Imagem pronta. Salve o perfil para confirmar.");
-    } catch (error) {
-      setProfileMessage(error.message);
-    }
   };
 
   const saveProfile = async (event) => {
@@ -712,12 +742,12 @@ export default function Home() {
       setProfileMessage(error.message);
       return;
     }
-    setData((current) => ({ ...current, profile: { displayName: nextName, avatar: profileAvatar } }));
+    setData((current) => ({ ...current, profile: { displayName: nextName } }));
     setProfileMessage("Perfil atualizado com sucesso.");
   };
 
   const savePlayerName = () => {
-    const nextName = editingPlayer?.name?.trim();
+    const nextName = editingPlayer?.name?.trim().slice(0, 60);
     const original = managedPlayers.find((player) => player.id === editingPlayer?.id);
     if (!original || !nextName) return;
     if (managedPlayers.some((player) => player.id !== original.id && player.name.toLowerCase() === nextName.toLowerCase())) {
@@ -782,16 +812,10 @@ export default function Home() {
       return;
     }
     setAuthBusy(true);
-    const verification = await supabase.auth.signInWithPassword({ email: session.user.email, password: currentPassword });
-    if (verification.error) {
-      setAuthBusy(false);
-      setSettingsMessage("A senha atual está incorreta.");
-      return;
-    }
-    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    const { error } = await supabase.auth.updateUser({ password: newPassword, current_password: currentPassword });
     setAuthBusy(false);
     if (error) {
-      setSettingsMessage(error.message);
+      setSettingsMessage(error.message.toLowerCase().includes("current") ? "A senha atual está incorreta." : "Não foi possível alterar a senha. Tente novamente.");
       return;
     }
     setCurrentPassword("");
@@ -803,7 +827,6 @@ export default function Home() {
   const signOut = async () => {
     if (dirtyRef.current) await syncNow();
     await supabase.auth.signOut();
-    setCloudOpen(false);
     setProfileMenuOpen(false);
     setProfileOpen(false);
     setData(initialState);
@@ -831,10 +854,24 @@ export default function Home() {
     event.target.value = "";
     if (!file) return;
     try {
+      if (file.size > 2 * 1024 * 1024) throw new Error("Arquivo muito grande");
       const imported = JSON.parse(await file.text());
-      if (!Array.isArray(imported.players) || !Array.isArray(imported.history) || !imported.settings) throw new Error("Arquivo incompatível");
+      const validPlayer = (player) => player && typeof player.id === "string" && typeof player.name === "string" && player.name.trim().length > 0 && player.name.length <= 60;
+      const validMatch = (game) => game && typeof game.id === "string" && Array.isArray(game.score) && game.score.length === 2 && Array.isArray(game.teams) && game.teams.length === 2 && game.teams.every((team) => Array.isArray(team?.starters) && Array.isArray(team?.bench)) && Array.isArray(game.events);
+      if (!Array.isArray(imported.players) || !imported.players.every(validPlayer) || !Array.isArray(imported.history) || !imported.history.every(validMatch) || !imported.settings || typeof imported.settings !== "object") throw new Error("Arquivo incompatível");
+      if (imported.players.length > 500 || imported.history.length > 2000 || (imported.trainingPlans || []).length > 200) throw new Error("Limites excedidos");
       if (!window.confirm("Substituir os dados atuais pelos dados deste backup?")) return;
-      const nextData = { ...initialState, ...imported };
+      const nextData = {
+        ...initialState,
+        ...imported,
+        profile: { displayName: String(imported.profile?.displayName || "").slice(0, 40) },
+        players: imported.players.map((player) => ({ ...player, name: player.name.trim().slice(0, 60) })),
+        settings: { ...initialState.settings, ...imported.settings },
+        activeMatch: imported.activeMatch && validMatch(imported.activeMatch) ? imported.activeMatch : null,
+        trainingPlans: Array.isArray(imported.trainingPlans) ? imported.trainingPlans : [],
+        trainingHistory: Array.isArray(imported.trainingHistory) ? imported.trainingHistory : [],
+        activeTraining: null,
+      };
       setData(nextData);
       dataRef.current = nextData;
       dirtyRef.current = true;
@@ -853,18 +890,19 @@ export default function Home() {
   if (!ready) return <main className="app-shell loading">Preparando o Resenha…</main>;
   const match = data.activeMatch;
   const activeTraining = data.activeTraining;
-  const activeExercise = activeTraining?.exercises?.[activeTraining.currentIndex] || null;
+  const currentRankingKind = sportKind(statsSport);
+  const primaryRanking = currentRankingKind === "football" ? generalRanking : goalsRanking;
+  const totalScores = goalsRanking.reduce((sum, player) => sum + player.goals, 0);
 
   return (
     <main className="app-shell">
       <header className="topbar">
         <button className="brand" onClick={() => setView("setup")} aria-label="Ir para o início"><span className="brand-mark"><Goal size={24} /></span><span><strong>Resenha</strong><small>Times, placar e desempenho</small></span></button>
         <div className="topbar-actions">
-          <div className="app-menu-area" ref={appMenuRef}><button className="menu-trigger" onClick={() => setAppMenuOpen((current) => !current)} aria-expanded={appMenuOpen} aria-haspopup="menu"><Menu size={20} /><span>Menu</span></button>{appMenuOpen && <nav className="app-menu-dropdown" aria-label="Menu principal"><button className={view === "setup" ? "active" : ""} onClick={() => { setView("setup"); setAppMenuOpen(false); }}><Users size={18} /><span><strong>Preparar jogo</strong><small>Presença e divisão dos times</small></span></button><button className={view === "match" ? "active" : ""} disabled={!match} onClick={() => { setView("match"); setAppMenuOpen(false); }}><Activity size={18} /><span><strong>Partida</strong><small>Placar, tempo e súmula</small></span></button><button className={view === "stats" ? "active" : ""} onClick={() => { setView("stats"); setAppMenuOpen(false); }}><BarChart3 size={18} /><span><strong>Estatísticas</strong><small>Artilharia e resultados</small></span></button><button className={view === "evolution" ? "active" : ""} onClick={() => { setView("evolution"); setAppMenuOpen(false); }}><TrendingUp size={18} /><span><strong>Evolução</strong><small>Desempenho de cada jogador</small></span></button><button className={view === "training" ? "active" : ""} onClick={() => { setSettingsMessage(""); setView("training"); setAppMenuOpen(false); }}><Dumbbell size={18} /><span><strong>Modo treino</strong><small>Cronograma e preparação física</small></span></button></nav>}</div>
+          <div className="app-menu-area" ref={appMenuRef}><button className="menu-trigger" onClick={() => setAppMenuOpen((current) => !current)} aria-expanded={appMenuOpen} aria-haspopup="menu"><Menu size={20} /><span>Menu</span></button>{appMenuOpen && <nav className="app-menu-dropdown" aria-label="Menu principal"><button className={view === "setup" ? "active" : ""} onClick={() => { setView("setup"); setAppMenuOpen(false); }}><Users size={18} /><span><strong>Preparar jogo</strong><small>Presença e divisão dos times</small></span></button><button className={view === "match" ? "active" : ""} disabled={!match} onClick={() => { setView("match"); setAppMenuOpen(false); }}><Activity size={18} /><span><strong>Partida</strong><small>Placar, tempo e súmula</small></span></button><button className={view === "stats" ? "active" : ""} onClick={() => { setView("stats"); setAppMenuOpen(false); }}><BarChart3 size={18} /><span><strong>Estatísticas</strong><small>Rankings e resultados</small></span></button><button className={view === "evolution" ? "active" : ""} onClick={() => { setView("evolution"); setAppMenuOpen(false); }}><TrendingUp size={18} /><span><strong>Evolução</strong><small>Desempenho de cada jogador</small></span></button><button className={view === "training" ? "active" : ""} onClick={() => { setSettingsMessage(""); setView("training"); setAppMenuOpen(false); }}><Dumbbell size={18} /><span><strong>Modo treino</strong><small>Cronograma e preparação física</small></span></button><button className={view === "training-stats" ? "active" : ""} onClick={() => { setView("training-stats"); setAppMenuOpen(false); }}><ClipboardList size={18} /><span><strong>Estatísticas de treino</strong><small>Evolução da preparação pessoal</small></span></button></nav>}</div>
           <button className="icon-button theme-button" onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")} aria-label={theme === "dark" ? "Ativar modo claro" : "Ativar modo escuro"}>{theme === "dark" ? <Sun size={19} /> : <Moon size={19} />}</button>
-          <button className="cloud-button connected" onClick={() => setCloudOpen(true)}><Cloud size={18} /><span>{syncLabel}</span></button>
           <div className="profile-area" ref={profileMenuRef}>
-            <button className="profile-trigger" onClick={() => setProfileMenuOpen((current) => !current)} aria-expanded={profileMenuOpen} aria-haspopup="menu"><ProfileAvatar name={displayName} src={data.profile?.avatar} /><span><strong>{displayName}</strong><small>{session.user.email}</small></span><ChevronDown size={16} /></button>
+            <button className="profile-trigger" onClick={() => setProfileMenuOpen((current) => !current)} aria-expanded={profileMenuOpen} aria-haspopup="menu"><ProfileAvatar name={displayName} /><span><strong>{displayName}</strong><small>{session.user.email}</small></span><ChevronDown size={16} /></button>
             {profileMenuOpen && <div className="profile-dropdown" role="menu"><button onClick={openProfile} role="menuitem"><UserRound size={17} /><span><strong>Meu perfil</strong><small>Nome e foto</small></span></button><button onClick={() => { setProfileMenuOpen(false); setSettingsMessage(""); setView("settings"); }} role="menuitem"><Settings size={17} /><span><strong>Configurações</strong><small>Jogadores e partidas</small></span></button><button onClick={() => { setProfileMenuOpen(false); setSettingsMessage(""); setCurrentPassword(""); setNewPassword(""); setConfirmNewPassword(""); setView("password"); }} role="menuitem"><KeyRound size={17} /><span><strong>Trocar senha</strong><small>Validar senha atual</small></span></button><button className="logout-item" onClick={signOut} role="menuitem"><LogOut size={17} /><span><strong>Sair</strong><small>Encerrar acesso</small></span></button></div>}
           </div>
         </div>
@@ -875,20 +913,20 @@ export default function Home() {
           <div className="main-column">
             <div className="section-heading"><div><span className="eyebrow">PASSO 1</span><h1>Quem vai jogar hoje?</h1></div><span className="count-pill">{data.players.length} cadastrados</span></div>
             <form className="add-player" onSubmit={(event) => { event.preventDefault(); addPlayer(); }}>
-              <div className="field grow"><label htmlFor="player-name">Nome do jogador</label><input ref={nameInput} id="player-name" value={playerName} onChange={(event) => setPlayerName(event.target.value)} placeholder="Ex.: João" autoComplete="off" /></div>
+              <div className="field grow"><label htmlFor="player-name">Nome do jogador</label><input ref={nameInput} id="player-name" maxLength="60" value={playerName} onChange={(event) => setPlayerName(event.target.value)} placeholder="Ex.: João" autoComplete="off" /></div>
               <button className="button primary add-button" type="submit"><UserPlus size={19} /> Adicionar</button>
             </form>
             <div className="attendance-toolbar"><div><Check size={18} /><span><strong>Presença de hoje</strong><small>{presentPlayers.length} de {data.players.length} confirmados</small></span></div><div><button type="button" onClick={() => setAllAttendance(true)}>Todos</button><button type="button" onClick={() => setAllAttendance(false)}>Nenhum</button></div></div>
             <div className="player-list">{data.players.length === 0 ? <Empty icon={<Users size={28} />} title="A lista ainda está vazia" text="Adicione os amigos que vão participar do jogo." /> : visiblePlayers.map((player, index) => {
               const stats = playerStats.get(player.id);
               const present = presentPlayers.some((item) => item.id === player.id);
-              return <article className={`player-row ${present ? "is-present" : "is-absent"}`} key={player.id}><Avatar name={player.name} /><div className="player-info"><strong>{player.name}</strong><span>Jogador #{String((playerPage - 1) * PLAYER_PAGE_SIZE + index + 1).padStart(2, "0")} · {stats.matches} {stats.matches === 1 ? "partida" : "partidas"} · {stats.totalPoints} {scoreWord(data.settings.sport, stats.totalPoints)}</span></div><div className="player-rating"><Stars rating={stats.rating} label={`Nível geral: ${stats.rating} de 5`} /><small>{stats.label} · média {stats.average.toFixed(1)}</small>{stats.lastRating !== null && <em>Último jogo: {stats.lastRating}★</em>}</div><button className={`presence-button ${present ? "present" : ""}`} type="button" onClick={() => toggleAttendance(player.id)} aria-pressed={present}>{present ? <><Check size={15} /> Presente</> : "Ausente"}</button><button className="icon-button danger" onClick={() => removePlayer(player.id)} aria-label={`Remover ${player.name}`}><Trash2 size={17} /></button></article>;
+              return <article className={`player-row ${present ? "is-present" : "is-absent"}`} key={player.id}><Avatar name={player.name} /><div className="player-info"><strong>{player.name}</strong><span>Jogador #{String((playerPage - 1) * PLAYER_PAGE_SIZE + index + 1).padStart(2, "0")} · {stats.matches} {stats.matches === 1 ? "partida" : "partidas"} · {stats.totalPoints} {scoreWord(data.settings.sport, stats.totalPoints)}</span></div><div className="player-rating"><Stars rating={stats.rating} label={`Nível geral: ${stats.rating} de 5`} /><small>{stats.label} · média {stats.average.toFixed(1)}</small>{stats.lastRating !== null && <em>Último jogo: {stats.lastRating}★</em>}</div><button className={`presence-button ${present ? "present" : ""}`} type="button" onClick={() => toggleAttendance(player.id)} aria-pressed={present}>{present ? <><Check size={15} /> Presente</> : "Ausente"}</button></article>;
             })}</div>
             {data.players.length > PLAYER_PAGE_SIZE && <Pagination page={playerPage} pageCount={playerPageCount} onChange={setPlayerPage} />}
           </div>
           <aside className="config-card">
             <div className="section-heading compact"><div><span className="eyebrow">PASSO 2</span><h2>Configurar partida</h2></div><Sparkles size={21} /></div>
-            <div className="field"><label htmlFor="sport">Esporte</label><select id="sport" value={data.settings.sport} onChange={(event) => changeSport(event.target.value)}>{Object.keys(startersBySport).map((sport) => <option key={sport}>{sport}</option>)}</select></div>
+            <div className="field"><label htmlFor="sport">Esporte</label><select id="sport" value={canonicalSport(data.settings.sport)} onChange={(event) => changeSport(event.target.value)}>{Object.keys(SPORT_PRESETS).map((sport) => <option key={sport}>{sport}</option>)}</select></div>
             <div className="two-fields"><div className="field"><label htmlFor="duration">Tempo de jogo</label><div className="input-suffix"><input id="duration" type="number" min="1" max="120" value={data.settings.duration} onChange={(event) => updateSettings("duration", Math.max(1, Number(event.target.value)))} /><span>min</span></div></div><div className="field"><label htmlFor="starters">Em jogo por time</label><input id="starters" type="number" min="1" max="11" value={data.settings.startersPerTeam} onChange={(event) => updateSettings("startersPerTeam", Math.max(1, Number(event.target.value)))} /></div></div>
             <fieldset className="mode-group"><legend>Divisão dos times</legend><Mode active={data.settings.drawMode === "balanced"} onClick={() => updateSettings("drawMode", "balanced")} icon={<Shield size={19} />} title="Equilibrado" text="Usa o desempenho geral" /><Mode active={data.settings.drawMode === "random"} onClick={() => updateSettings("drawMode", "random")} icon={<Sparkles size={19} />} title="Aleatório" text="Sem considerar nível" /><Mode active={data.settings.drawMode === "manual"} onClick={() => updateSettings("drawMode", "manual")} icon={<Users size={19} />} title="Manual" text="Escolha cada time" /></fieldset>
             {data.settings.drawMode === "manual" && <div className="manual-teams"><header><strong>Divisão manual</strong><small>Defina o time dos presentes</small></header>{presentPlayers.map((player) => <div className="manual-player" key={player.id}><span>{player.name}</span><div><button type="button" className={manualAssignments[player.id] === 0 ? "blue active" : "blue"} onClick={() => setManualAssignments((current) => ({ ...current, [player.id]: 0 }))}>Azul</button><button type="button" className={manualAssignments[player.id] === 1 ? "orange active" : "orange"} onClick={() => setManualAssignments((current) => ({ ...current, [player.id]: 1 }))}>Laranja</button></div></div>)}</div>}
@@ -901,26 +939,33 @@ export default function Home() {
         {view === "match" && match && <section className="match-view">
           <div className="scoreboard"><TeamScore team={match.teams[0]} score={match.score[0]} /><div className="timer-panel"><span className={match.running ? "live-label" : "live-label paused"}>{match.running ? "EM JOGO" : match.remainingSeconds === 0 ? "FIM DO TEMPO" : "PAUSADO"}</span><strong className={match.remainingSeconds <= 60 ? "ending" : ""}>{formatTime(match.remainingSeconds)}</strong><div className="timer-actions"><button className="button timer-button" onClick={toggleTimer}>{match.running ? <CirclePause size={19} /> : <CirclePlay size={19} />}{match.running ? "Pausar" : "Iniciar"}</button><button className="icon-button" onClick={resetTimer} aria-label="Reiniciar cronômetro"><RotateCcw size={18} /></button></div></div><TeamScore team={match.teams[1]} score={match.score[1]} /></div>
           <div className="match-grid">
-            {match.teams.map((team, teamIndex) => <TeamCard key={team.name} team={team} onGoal={() => { setGoalTeam(teamIndex); setGoalScorer(""); setGoalAssist(""); }} onSub={() => openSubstitution(teamIndex)} />)}
-            <aside className="events-card"><header><div><span className="eyebrow">SÚMULA</span><h2>Lances do jogo</h2></div><span className="event-count">{match.events.length}</span></header><div className="events-list">{match.events.length === 0 ? <div className="empty-events"><Activity size={25} /><span>Os gols e trocas aparecerão aqui.</span></div> : match.events.map((event) => <div className={`event-row ${event.type}`} key={event.id}><span className="event-minute">{event.minute}&apos;</span><span className={`event-icon ${match.teams[event.teamIndex].color}`}>{event.type === "goal" ? <Goal size={17} /> : <ArrowDownUp size={17} />}</span><div>{event.type === "goal" ? <><strong>Gol de {event.playerName}</strong><small>{event.assistPlayerName ? `Assistência de ${event.assistPlayerName} · ` : ""}{match.teams[event.teamIndex].name}</small></> : <><strong>Entrou {event.playerIn}</strong><small>Saiu {event.playerOut}</small></>}</div>{event.type === "goal" && <button className="icon-button mini" onClick={() => undoGoal(event.id)} aria-label="Desfazer gol"><X size={14} /></button>}</div>)}</div><div className="finish-actions"><button className="button primary full" onClick={finishMatch}><Check size={18} /> Encerrar e salvar jogo</button><button className="text-button danger-text" onClick={cancelMatch}>Descartar partida</button></div></aside>
+            {match.teams.map((team, teamIndex) => <TeamCard key={team.name} team={team} scoreLabel={scoreAction(match.sport)} onGoal={() => { setGoalTeam(teamIndex); setGoalScorer(""); setGoalAssist(""); }} onSub={() => openSubstitution(teamIndex)} />)}
+            <aside className="events-card"><header><div><span className="eyebrow">SÚMULA</span><h2>Lances do jogo</h2></div><span className="event-count">{match.events.length}</span></header><div className="events-list">{match.events.length === 0 ? <div className="empty-events"><Activity size={25} /><span>As pontuações e trocas aparecerão aqui.</span></div> : match.events.map((event) => <div className={`event-row ${event.type}`} key={event.id}><span className="event-minute">{event.minute}&apos;</span><span className={`event-icon ${match.teams[event.teamIndex].color}`}>{event.type === "goal" ? <Goal size={17} /> : <ArrowDownUp size={17} />}</span><div>{event.type === "goal" ? <><strong>{scoreAction(match.sport)} de {event.playerName}</strong><small>{event.assistPlayerName ? `Assistência de ${event.assistPlayerName} · ` : ""}{match.teams[event.teamIndex].name}</small></> : <><strong>Entrou {event.playerIn}</strong><small>Saiu {event.playerOut}</small></>}</div>{event.type === "goal" && <button className="undo-score-button" type="button" onClick={() => undoGoal(event.id)} aria-label={`Anular ${scoreAction(match.sport).toLowerCase()} de ${event.playerName}`}><RotateCcw size={14} /> Anular</button>}</div>)}</div><div className="finish-actions"><button className="button primary full" onClick={finishMatch}><Check size={18} /> Encerrar e salvar jogo</button><button className="text-button danger-text" onClick={cancelMatch}>Descartar partida</button></div></aside>
           </div>
         </section>}
 
         {view === "stats" && <section className="stats-view">
-          <div className="section-heading stats-heading"><div><span className="eyebrow">FECHAMENTO DO MÊS</span><h1>Artilharia e resultados</h1></div><label className="month-picker"><CalendarDays size={18} /><input type="month" value={month} onChange={(event) => setMonth(event.target.value)} /></label></div>
-          <div className="summary-strip"><Summary icon={<Trophy size={20} />} label="Artilheiro" value={ranking[0]?.name || "—"} /><Summary icon={<Goal size={20} />} label="Gols no mês" value={ranking.reduce((sum, item) => sum + item.goals, 0)} /><Summary icon={<CalendarDays size={20} />} label="Jogos realizados" value={monthMatches.length} /></div>
-          <div className="stats-grid"><article className="ranking-card"><header><div><span className="eyebrow">RANKING</span><h2>Artilheiros do mês</h2></div><Medal size={23} /></header>{ranking.length === 0 ? <Empty icon={<Goal size={28} />} title="Nenhum gol registrado" text="Encerre uma partida para contabilizar a artilharia." /> : <div className="ranking-list">{ranking.map((player, index) => <div className={`ranking-row rank-${index + 1}`} key={player.id}><span className="rank-number">{index + 1}</span><Avatar name={player.name} /><strong>{player.name}</strong><div className="goal-total"><b>{player.goals}</b><small>{player.goals === 1 ? "gol" : "gols"} · {player.assists} {player.assists === 1 ? "assist." : "assist."}</small></div></div>)}</div>}</article><article className="history-card"><header><div><span className="eyebrow">HISTÓRICO</span><h2>Jogos do mês</h2></div></header>{monthMatches.length === 0 ? <Empty icon={<CalendarDays size={28} />} title="Nenhum jogo neste mês" text="Os resultados salvos ficarão organizados aqui." /> : <div className="history-list">{monthMatches.map((game) => <div className="history-row" key={game.id}><div className="history-date"><strong>{new Date(game.finishedAt || game.date).toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}</strong><small>{game.sport} · {(game.attendanceIds || game.teams.flatMap((team) => [...team.starters, ...team.bench])).length} presentes</small></div><div className="history-score"><span>{game.teams[0].short}</span><strong>{game.score[0]} <i>×</i> {game.score[1]}</strong><span>{game.teams[1].short}</span></div></div>)}</div>}</article></div>
+          <div className="section-heading stats-heading"><div><span className="eyebrow">FECHAMENTO DO MÊS</span><h1>{currentRankingKind === "volleyball" ? "Ranking de pontos" : currentRankingKind === "basketball" ? "Ranking de cestas" : "Rankings da temporada"}</h1></div><div className="stats-filters"><select value={statsSport} onChange={(event) => setStatsSport(event.target.value)}>{Object.keys(SPORT_PRESETS).map((sport) => <option key={sport}>{sport}</option>)}</select><label className="month-picker"><CalendarDays size={18} /><input type="month" value={month} onChange={(event) => setMonth(event.target.value)} /></label></div></div>
+          <div className="summary-strip"><Summary icon={<Trophy size={20} />} label={currentRankingKind === "football" ? "Líder geral" : currentRankingKind === "basketball" ? "Cestinha" : currentRankingKind === "volleyball" ? "Maior pontuador" : "Artilheiro"} value={primaryRanking[0]?.name || "—"} /><Summary icon={<Goal size={20} />} label={`${scoreAction(statsSport)}s no mês`} value={totalScores} /><Summary icon={<CalendarDays size={20} />} label="Jogos realizados" value={monthMatches.length} /></div>
+          <div className={`ranking-panels ${currentRankingKind === "football" ? "three" : "single"}`}>{currentRankingKind === "football" ? <><RankingPanel title="Ranking geral" eyebrow="GOLS + ASSISTÊNCIAS" ranking={generalRanking} valueKey="total" valueLabel="participações" /><RankingPanel title="Assistências" eyebrow="GARÇONS DO MÊS" ranking={assistsRanking} valueKey="assists" valueLabel="assistências" /><RankingPanel title="Gols" eyebrow="ARTILHARIA" ranking={goalsRanking} valueKey="goals" valueLabel="gols" /></> : <RankingPanel title={currentRankingKind === "basketball" ? "Cestinhas do mês" : currentRankingKind === "volleyball" ? "Pontuadores do mês" : "Artilheiros do mês"} eyebrow="RANKING" ranking={goalsRanking} valueKey="goals" valueLabel={currentRankingKind === "basketball" ? "cestas" : currentRankingKind === "volleyball" ? "pontos" : "gols"} />}</div>
+          <article className="history-card stats-history"><header><div><span className="eyebrow">HISTÓRICO</span><h2>Jogos de {statsSport} no mês</h2></div></header>{monthMatches.length === 0 ? <Empty icon={<CalendarDays size={28} />} title="Nenhum jogo nesta seleção" text="Altere o mês ou encerre uma partida desta modalidade." /> : <div className="history-list">{monthMatches.map((game) => <div className="history-row" key={game.id}><div className="history-date"><strong>{new Date(game.finishedAt || game.date).toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}</strong><small>{canonicalSport(game.sport)} · {(game.attendanceIds || game.teams.flatMap((team) => [...team.starters, ...team.bench])).length} presentes</small></div><div className="history-score"><span>{game.teams[0].short}</span><strong>{game.score[0]} <i>×</i> {game.score[1]}</strong><span>{game.teams[1].short}</span></div></div>)}</div>}</article>
         </section>}
 
         {view === "evolution" && <section className="evolution-view">
-          <div className="section-heading stats-heading"><div><span className="eyebrow">DESEMPENHO INDIVIDUAL</span><h1>Evolução mensal</h1><p className="section-description">Compare presença, pontuações, assistências e nível por partida.</p></div><div className="evolution-filters"><select value={evolutionPlayer?.id || ""} onChange={(event) => setEvolutionPlayerId(event.target.value)} disabled={!managedPlayers.length}>{managedPlayers.length ? managedPlayers.map((player) => <option key={player.id} value={player.id}>{player.name}</option>) : <option>Nenhum jogador</option>}</select><input type="month" value={evolutionMonth} onChange={(event) => setEvolutionMonth(event.target.value)} /></div></div>
-          {!evolutionPlayer ? <article className="settings-card"><Empty icon={<TrendingUp size={30} />} title="Nenhum jogador disponível" text="Cadastre jogadores e encerre partidas para acompanhar a evolução." /></article> : <><div className="summary-strip evolution-summary"><Summary icon={<CalendarDays size={20} />} label="Presenças no mês" value={evolutionGames.length} /><Summary icon={<Goal size={20} />} label="Gols ou pontos" value={evolutionPoints} /><Summary icon={<Sparkles size={20} />} label="Assistências" value={evolutionAssists} /><Summary icon={<TrendingUp size={20} />} label="Média por partida" value={evolutionAverage.toFixed(1)} /></div><div className="evolution-grid"><article className="evolution-profile-card"><ProfileAvatar name={evolutionPlayer.name} large /><div><span className="eyebrow">NÍVEL GERAL</span><h2>{evolutionPlayer.name}</h2><Stars rating={playerStats.get(evolutionPlayer.id)?.rating || ratingFromAverage(evolutionAverage, evolutionGames.length)} label="Nível geral do jogador" /><p>{playerStats.get(evolutionPlayer.id)?.label || ratingLabel(ratingFromAverage(evolutionAverage, evolutionGames.length))}</p></div></article><article className="evolution-chart-card"><header><div><span className="eyebrow">POR PARTIDA</span><h2>Produção no mês</h2></div></header>{evolutionGames.length === 0 ? <Empty icon={<BarChart3 size={28} />} title="Sem partidas neste mês" text="As presenças e o desempenho aparecerão depois de uma partida salva." /> : <div className="evolution-game-list">{evolutionGames.map(({ game, points, assists, rating }) => <div className="evolution-game-row" key={game.id}><div><strong>{new Date(game.finishedAt || game.date).toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}</strong><small>{game.sport}</small></div><div className="performance-bars"><span style={{ "--bar": `${Math.min(100, points * 20)}%` }}><i />{points} {scoreWord(game.sport, points)}</span><span className="assist-bar" style={{ "--bar": `${Math.min(100, assists * 25)}%` }}><i />{assists} assist.</span></div><Stars rating={rating} label={`Nível da partida: ${rating} estrelas`} /></div>)}</div>}</article></div></>}
+          <div className="evolution-hero"><div><span className="eyebrow">DESEMPENHO INDIVIDUAL</span><h1>Evolução mensal</h1><p>Escolha o atleta e o período para visualizar presença, produção e nível em cada partida.</p></div><div className="evolution-selector-card"><ProfileAvatar name={evolutionPlayer?.name || "Atleta"} large /><label><span><UserRound size={15} /> Atleta</span><select value={evolutionPlayer?.id || ""} onChange={(event) => setEvolutionPlayerId(event.target.value)} disabled={!managedPlayers.length}>{managedPlayers.length ? managedPlayers.map((player) => <option key={player.id} value={player.id}>{player.name}</option>) : <option>Nenhum jogador</option>}</select></label><label><span><CalendarDays size={15} /> Período</span><input type="month" value={evolutionMonth} onChange={(event) => setEvolutionMonth(event.target.value)} /></label></div></div>
+          {!evolutionPlayer ? <article className="settings-card"><Empty icon={<TrendingUp size={30} />} title="Nenhum jogador disponível" text="Cadastre jogadores e encerre partidas para acompanhar a evolução." /></article> : <><div className="summary-strip evolution-summary"><Summary icon={<CalendarDays size={20} />} label="Presenças no mês" value={evolutionGames.length} /><Summary icon={<Goal size={20} />} label="Pontuações" value={evolutionPoints} /><Summary icon={<Sparkles size={20} />} label="Assistências" value={evolutionAssists} /><Summary icon={<TrendingUp size={20} />} label="Média por partida" value={evolutionAverage.toFixed(1)} /></div><div className="evolution-grid"><article className="evolution-profile-card"><ProfileAvatar name={evolutionPlayer.name} large /><div><span className="eyebrow">NÍVEL GERAL</span><h2>{evolutionPlayer.name}</h2><Stars rating={playerStats.get(evolutionPlayer.id)?.rating || ratingFromAverage(evolutionAverage, evolutionGames.length)} label="Nível geral do jogador" /><p>{playerStats.get(evolutionPlayer.id)?.label || ratingLabel(ratingFromAverage(evolutionAverage, evolutionGames.length))}</p></div></article><article className="evolution-chart-card"><header><div><span className="eyebrow">POR PARTIDA</span><h2>Produção no mês</h2></div></header>{evolutionGames.length === 0 ? <Empty icon={<BarChart3 size={28} />} title="Sem partidas neste mês" text="As presenças e o desempenho aparecerão depois de uma partida salva." /> : <div className="evolution-game-list">{evolutionGames.map(({ game, points, assists, rating }) => <div className="evolution-game-row" key={game.id}><div><strong>{new Date(game.finishedAt || game.date).toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}</strong><small>{canonicalSport(game.sport)}</small></div><div className="performance-bars"><span style={{ "--bar": `${Math.min(100, points * 20)}%` }}><i />{points} {scoreWord(game.sport, points)}</span>{sportKind(game.sport) === "football" && <span className="assist-bar" style={{ "--bar": `${Math.min(100, assists * 25)}%` }}><i />{assists} assist.</span>}</div><Stars rating={rating} label={`Nível da partida: ${rating} estrelas`} /></div>)}</div>}</article></div></>}
         </section>}
 
         {view === "training" && <section className="training-view">
           <div className="section-heading settings-heading"><div><span className="eyebrow">PREPARAÇÃO FÍSICA</span><h1>Modo treino</h1><p>Monte rotinas por tempo ou repetições, organize os dias e registre o que foi concluído.</p></div><Dumbbell size={29} /></div>
           {settingsMessage && <p className="settings-message" role="status">{settingsMessage}</p>}
-          {activeTraining && activeExercise ? <article className="active-training-card"><header><div><span className="live-label">TREINO EM ANDAMENTO</span><h2>{activeTraining.name}</h2><p>Exercício {activeTraining.currentIndex + 1} de {activeTraining.exercises.length}</p></div><button className="text-button danger-text" onClick={cancelTraining}>Encerrar treino</button></header><div className="active-exercise"><span className="exercise-icon"><Dumbbell size={28} /></span><div><small>{activeExercise.mode === "time" ? "EXERCÍCIO CRONOMETRADO" : "EXERCÍCIO POR REPETIÇÕES"}</small><h3>{activeExercise.name}</h3></div>{activeExercise.mode === "time" ? <strong className={activeTraining.remainingSeconds === 0 ? "finished" : ""}>{formatTime(activeTraining.remainingSeconds)}</strong> : <strong>{activeExercise.target}<small> repetições</small></strong>}</div>{activeExercise.mode === "time" && <div className="training-timer-actions"><button className="button timer-button" onClick={toggleTrainingTimer}>{activeTraining.running ? <CirclePause size={18} /> : <CirclePlay size={18} />}{activeTraining.running ? "Pausar" : "Iniciar"}</button><button className="icon-button" onClick={resetTrainingTimer}><RotateCcw size={17} /></button></div>}<div className="training-progress"><i style={{ width: `${(activeTraining.currentIndex / activeTraining.exercises.length) * 100}%` }} /></div><button className="button primary large full" onClick={completeTrainingExercise}><Check size={18} /> {activeTraining.currentIndex + 1 === activeTraining.exercises.length ? "Concluir e registrar treino" : "Concluir exercício e avançar"}</button></article> : <div className="training-layout"><article className="settings-card training-builder"><header><span><Plus size={20} /></span><div><h2>Criar treino</h2><p>Adicione exercícios e escolha os dias planejados.</p></div></header><form onSubmit={saveTrainingPlan}><div className="field"><label htmlFor="training-name">Nome do treino</label><input id="training-name" value={trainingName} onChange={(event) => setTrainingName(event.target.value)} placeholder="Ex.: Condicionamento de terça" /></div><fieldset className="day-picker"><legend>Dias do cronograma</legend>{TRAINING_DAYS.map((day) => <button type="button" key={day} className={trainingDays.includes(day) ? "active" : ""} onClick={() => setTrainingDays((current) => current.includes(day) ? current.filter((item) => item !== day) : [...current, day])}>{day}</button>)}</fieldset><div className="exercise-composer"><div className="field grow"><label htmlFor="exercise-name">Exercício</label><input id="exercise-name" value={exerciseDraft.name} onChange={(event) => setExerciseDraft({ ...exerciseDraft, name: event.target.value })} placeholder="Ex.: Agachamento" /></div><div className="field"><label htmlFor="exercise-mode">Controle</label><select id="exercise-mode" value={exerciseDraft.mode} onChange={(event) => setExerciseDraft({ ...exerciseDraft, mode: event.target.value, target: event.target.value === "time" ? 30 : 10 })}><option value="time">Tempo</option><option value="reps">Repetições</option></select></div><div className="field target-field"><label htmlFor="exercise-target">{exerciseDraft.mode === "time" ? "Segundos" : "Repetições"}</label><input id="exercise-target" type="number" min="1" value={exerciseDraft.target} onChange={(event) => setExerciseDraft({ ...exerciseDraft, target: event.target.value })} /></div><button className="icon-button add-exercise" type="button" onClick={addTrainingExercise} aria-label="Adicionar exercício"><Plus size={19} /></button></div>{trainingExercises.length > 0 && <div className="draft-exercises">{trainingExercises.map((exercise, index) => <div key={exercise.id}><b>{index + 1}</b><span><strong>{exercise.name}</strong><small>{exercise.mode === "time" ? `${exercise.target} segundos` : `${exercise.target} repetições`}</small></span><button type="button" onClick={() => setTrainingExercises((current) => current.filter((item) => item.id !== exercise.id))}><X size={15} /></button></div>)}</div>}<button className="button primary large full" disabled={!trainingName.trim() || !trainingExercises.length}><Save size={18} /> Salvar no cronograma</button></form></article><div className="training-side"><article className="settings-card"><header><span><ClipboardList size={20} /></span><div><h2>Meus treinos</h2><p>Escolha uma rotina para começar.</p></div><b>{(data.trainingPlans || []).length}</b></header>{(data.trainingPlans || []).length === 0 ? <Empty icon={<Dumbbell size={28} />} title="Nenhum treino criado" text="Monte sua primeira rotina ao lado." /> : <div className="training-plan-list">{data.trainingPlans.map((plan) => <div className="training-plan" key={plan.id}><div><strong>{plan.name}</strong><small>{plan.exercises.length} exercícios · {plan.days?.length ? plan.days.join(", ") : "sem dias definidos"}</small></div><button className="button primary" onClick={() => startTraining(plan)}><CirclePlay size={16} /> Iniciar</button><button className="icon-button danger" onClick={() => deleteTrainingPlan(plan.id)}><Trash2 size={16} /></button></div>)}</div>}</article><article className="settings-card training-history-card"><header><span><Check size={20} /></span><div><h2>Atividades concluídas</h2><p>Registro dos treinos realizados.</p></div></header>{(data.trainingHistory || []).length === 0 ? <p className="training-empty-text">Nenhum treino concluído ainda.</p> : <div className="training-history">{data.trainingHistory.slice(0, 8).map((training) => <div key={training.id}><Check size={15} /><span><strong>{training.name}</strong><small>{new Date(training.finishedAt).toLocaleDateString("pt-BR")} · {training.exercises.length} exercícios</small></span></div>)}</div>}</article></div></div>}
+          {activeTraining ? <article className="active-training-card training-checklist-card"><header><div><span className="live-label">TREINO EM ANDAMENTO</span><h2>{activeTraining.name}</h2><p>{activeTraining.exercises.filter((exercise) => exercise.completed).length} de {activeTraining.exercises.length} exercícios concluídos</p></div><button className="text-button danger-text" onClick={cancelTraining}>Cancelar treino</button></header><div className="training-exercise-checklist">{activeTraining.exercises.map((exercise, index) => { const running = activeTraining.runningExerciseId === exercise.id; const remaining = exercise.remainingSeconds ?? exerciseSeconds(exercise); return <article className={exercise.completed ? "training-exercise-row completed" : "training-exercise-row"} key={exercise.id}><label className="exercise-checkbox"><input type="checkbox" checked={Boolean(exercise.completed)} onChange={() => toggleTrainingExerciseDone(exercise.id)} /><span><Check size={15} /></span></label><div className="exercise-main"><small>EXERCÍCIO {index + 1}</small><strong>{exercise.name}</strong><em>{exerciseTargetLabel(exercise)}</em></div>{exercise.mode === "time" ? <><b className={remaining === 0 ? "timer-finished" : ""}>{formatTime(remaining)}</b><div className="exercise-timer-controls"><button className="icon-button" onClick={() => toggleTrainingTimer(exercise.id)} disabled={exercise.completed || remaining === 0} aria-label={running ? "Pausar cronômetro" : "Iniciar cronômetro"}>{running ? <CirclePause size={18} /> : <CirclePlay size={18} />}</button><button className="icon-button" onClick={() => resetTrainingTimer(exercise.id)} disabled={exercise.completed} aria-label="Reiniciar cronômetro"><RotateCcw size={17} /></button></div></> : <b className="reps-value">{exercise.target}<small> rep.</small></b>}</article>; })}</div><div className="training-progress"><i style={{ width: `${(activeTraining.exercises.filter((exercise) => exercise.completed).length / activeTraining.exercises.length) * 100}%` }} /></div><button className="button primary large full" onClick={finishTraining} disabled={!activeTraining.exercises.some((exercise) => exercise.completed)}><Check size={18} /> Finalizar e registrar treino</button></article> : <div className="training-layout"><article className="settings-card training-builder"><header><span><Plus size={20} /></span><div><h2>Criar treino</h2><p>Adicione exercícios e escolha os dias planejados.</p></div></header><form onSubmit={saveTrainingPlan}><div className="field"><label htmlFor="training-name">Nome do treino</label><input id="training-name" value={trainingName} onChange={(event) => setTrainingName(event.target.value)} placeholder="Ex.: Condicionamento de terça" /></div><fieldset className="day-picker"><legend>Dias do cronograma</legend>{TRAINING_DAYS.map((day) => <button type="button" key={day} className={trainingDays.includes(day) ? "active" : ""} onClick={() => setTrainingDays((current) => current.includes(day) ? current.filter((item) => item !== day) : [...current, day])}>{day}</button>)}</fieldset><div className="exercise-composer"><div className="field grow"><label htmlFor="exercise-name">Exercício</label><input id="exercise-name" value={exerciseDraft.name} onChange={(event) => setExerciseDraft({ ...exerciseDraft, name: event.target.value })} placeholder="Ex.: Agachamento" /></div><div className="field"><label htmlFor="exercise-mode">Controle</label><select id="exercise-mode" value={exerciseDraft.mode} onChange={(event) => setExerciseDraft({ ...exerciseDraft, mode: event.target.value, target: event.target.value === "time" ? 30 : 10 })}><option value="time">Tempo</option><option value="reps">Repetições</option></select></div><div className="field target-field"><label htmlFor="exercise-target">Quantidade</label><input id="exercise-target" type="number" min="1" value={exerciseDraft.target} onChange={(event) => setExerciseDraft({ ...exerciseDraft, target: event.target.value })} /></div>{exerciseDraft.mode === "time" && <div className="field unit-field"><label htmlFor="exercise-unit">Unidade</label><select id="exercise-unit" value={exerciseDraft.unit} onChange={(event) => setExerciseDraft({ ...exerciseDraft, unit: event.target.value })}><option value="seconds">Segundos</option><option value="minutes">Minutos</option><option value="hours">Horas</option></select></div>}<button className="icon-button add-exercise" type="button" onClick={addTrainingExercise} aria-label="Adicionar exercício"><Plus size={19} /></button></div>{trainingExercises.length > 0 && <div className="draft-exercises">{trainingExercises.map((exercise, index) => <div key={exercise.id}><b>{index + 1}</b><span><strong>{exercise.name}</strong><small>{exerciseTargetLabel(exercise)}</small></span><button type="button" onClick={() => setTrainingExercises((current) => current.filter((item) => item.id !== exercise.id))}><X size={15} /></button></div>)}</div>}<button className="button primary large full" disabled={!trainingName.trim() || !trainingExercises.length}><Save size={18} /> Salvar no cronograma</button></form></article><div className="training-side"><article className="settings-card"><header><span><ClipboardList size={20} /></span><div><h2>Meus treinos</h2><p>Escolha uma rotina para começar.</p></div><b>{(data.trainingPlans || []).length}</b></header>{(data.trainingPlans || []).length === 0 ? <Empty icon={<Dumbbell size={28} />} title="Nenhum treino criado" text="Monte sua primeira rotina ao lado." /> : <div className="training-plan-list">{data.trainingPlans.map((plan) => <div className="training-plan" key={plan.id}><div><strong>{plan.name}</strong><small>{plan.exercises.length} exercícios · {plan.days?.length ? plan.days.join(", ") : "sem dias definidos"}</small></div><button className="button primary" onClick={() => startTraining(plan)}><CirclePlay size={16} /> Iniciar</button><button className="icon-button danger" onClick={() => deleteTrainingPlan(plan.id)}><Trash2 size={16} /></button></div>)}</div>}</article><article className="settings-card training-history-card"><header><span><Check size={20} /></span><div><h2>Atividades concluídas</h2><p>Registro dos treinos realizados.</p></div></header>{(data.trainingHistory || []).length === 0 ? <p className="training-empty-text">Nenhum treino concluído ainda.</p> : <div className="training-history">{data.trainingHistory.slice(0, 8).map((training) => <div key={training.id}><Check size={15} /><span><strong>{training.name}</strong><small>{new Date(training.finishedAt).toLocaleDateString("pt-BR")} · {(training.exercises || []).filter((exercise) => exercise.completed || exercise.completedAt).length} concluídos</small></span></div>)}</div>}</article></div></div>}
+        </section>}
+
+        {view === "training-stats" && <section className="training-stats-view">
+          <div className="section-heading stats-heading training-stats-heading"><div><span className="eyebrow">EVOLUÇÃO PESSOAL</span><h1>Estatísticas de treino</h1><p className="section-description">Acompanhe a frequência, o volume e os exercícios concluídos.</p></div><label className="month-picker"><CalendarDays size={18} /><input type="month" value={trainingStatsMonth} onChange={(event) => setTrainingStatsMonth(event.target.value)} /></label></div>
+          <div className="summary-strip evolution-summary"><Summary icon={<Dumbbell size={20} />} label="Treinos realizados" value={trainingMonthSessions.length} /><Summary icon={<Check size={20} />} label="Exercícios concluídos" value={trainingCompletedExercises.length} /><Summary icon={<Clock3 size={20} />} label="Tempo planejado" value={formatTrainingDuration(trainingTimeSeconds)} /><Summary icon={<Activity size={20} />} label="Repetições" value={trainingRepetitions} /></div>
+          <div className="training-stats-grid"><article className="settings-card"><header><span><TrendingUp size={20} /></span><div><h2>Frequência por treino</h2><p>Quantas vezes cada rotina foi registrada no mês.</p></div></header>{trainingPlanRanking.length === 0 ? <Empty icon={<BarChart3 size={28} />} title="Sem treinos neste mês" text="Finalize um treino para começar o acompanhamento." /> : <div className="training-frequency-list">{trainingPlanRanking.map(([name, total], index) => <div key={name}><b>{index + 1}</b><span><strong>{name}</strong><i><em style={{ width: `${Math.max(8, (total / trainingPlanRanking[0][1]) * 100)}%` }} /></i></span><strong>{total}x</strong></div>)}</div>}</article><article className="settings-card"><header><span><ClipboardList size={20} /></span><div><h2>Sessões do mês</h2><p>Detalhes dos treinos registrados.</p></div></header>{trainingMonthSessions.length === 0 ? <p className="training-empty-text">Nenhuma sessão encontrada.</p> : <div className="training-session-list">{trainingMonthSessions.map((training) => { const completed = (training.exercises || []).filter((exercise) => exercise.completed || exercise.completedAt); return <div key={training.id}><span className="match-date-badge">{new Date(training.finishedAt).toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}</span><div><strong>{training.name}</strong><small>{completed.length} de {(training.exercises || []).length} exercícios concluídos</small></div><b>{completed.length === (training.exercises || []).length ? "Completo" : "Parcial"}</b></div>; })}</div>}</article></div>
         </section>}
 
         {view === "password" && <section className="password-page"><button className="recovery-back" type="button" onClick={() => setView("setup")}><ArrowLeft size={17} /> Voltar</button><article className="settings-card password-change-card"><span className="auth-lock"><KeyRound size={23} /></span><h1>Trocar senha</h1><p>Confirme a senha atual e informe a nova senha duas vezes.</p>{settingsMessage && <p className="settings-message" role="status">{settingsMessage}</p>}<form onSubmit={changeLoggedPassword}><div className="field"><label htmlFor="current-password">Senha atual</label><input id="current-password" type="password" required autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} /></div><div className="field"><label htmlFor="new-logged-password">Nova senha</label><input id="new-logged-password" type="password" minLength="6" required autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></div><div className="field"><label htmlFor="confirm-logged-password">Repita a nova senha</label><input id="confirm-logged-password" type="password" minLength="6" required autoComplete="new-password" value={confirmNewPassword} onChange={(event) => setConfirmNewPassword(event.target.value)} /></div><button className="button primary large full" disabled={authBusy}><Save size={18} /> {authBusy ? "Validando..." : "Confirmar troca de senha"}</button></form></article></section>}
@@ -928,26 +973,20 @@ export default function Home() {
         {view === "settings" && <section className="settings-view">
           <div className="section-heading settings-heading"><div><span className="eyebrow">ADMINISTRAÇÃO</span><h1>Configurações</h1><p>Gerencie a conta, os jogadores do ranking e o histórico de partidas.</p></div><Settings size={28} /></div>
           {settingsMessage && <p className="settings-message" role="status">{settingsMessage}</p>}
-          <article className="settings-card account-settings compact-account"><header><span><UserRound size={20} /></span><div><h2>Perfil da conta</h2><p>Nome e foto exibidos no aplicativo.</p></div></header><div className="settings-profile"><ProfileAvatar name={displayName} src={data.profile?.avatar} large /><div><strong>{displayName}</strong><small>{session.user.email}</small></div><button className="button secondary" onClick={openProfile}><Pencil size={17} /> Editar perfil</button></div></article>
-          <article className="settings-card manage-card"><header><span><Users size={20} /></span><div><h2>Jogadores e ranking</h2><p>Alterar um nome atualiza o cadastro, as escalações e a artilharia. Excluir também remove as pontuações do histórico.</p></div><b>{managedPlayers.length}</b></header>{managedPlayers.length === 0 ? <Empty icon={<Users size={27} />} title="Nenhum jogador cadastrado" text="Os jogadores adicionados aparecerão aqui." /> : <div className="manage-list">{managedPlayers.map((player) => <div className="manage-row" key={player.id}><Avatar name={player.name} />{editingPlayer?.id === player.id ? <input autoFocus value={editingPlayer.name} onChange={(event) => setEditingPlayer({ ...editingPlayer, name: event.target.value })} onKeyDown={(event) => { if (event.key === "Enter") savePlayerName(); if (event.key === "Escape") setEditingPlayer(null); }} aria-label={`Novo nome de ${player.name}`} /> : <div><strong>{player.name}</strong><small>{player.totalPoints} pontos · {player.totalAssists} assistências{player.registered ? ` · nível ${playerStats.get(player.id)?.rating || 1}★` : " · somente no ranking"}</small></div>}<div className="manage-actions">{editingPlayer?.id === player.id ? <><button className="icon-button save-action" onClick={savePlayerName} aria-label="Salvar nome"><Check size={17} /></button><button className="icon-button" onClick={() => setEditingPlayer(null)} aria-label="Cancelar edição"><X size={17} /></button></> : <button className="icon-button" onClick={() => { setEditingPlayer({ id: player.id, name: player.name }); setSettingsMessage(""); }} aria-label={`Editar ${player.name}`}><Pencil size={16} /></button>}<button className="icon-button danger" onClick={() => deletePlayerEverywhere(player)} aria-label={`Excluir ${player.name}`}><Trash2 size={17} /></button></div></div>)}</div>}</article>
+          <article className="settings-card account-settings compact-account"><header><span><UserRound size={20} /></span><div><h2>Perfil da conta</h2><p>Nome exibido no aplicativo.</p></div></header><div className="settings-profile"><ProfileAvatar name={displayName} large /><div><strong>{displayName}</strong><small>{session.user.email}</small></div><button className="button secondary" onClick={openProfile}><Pencil size={17} /> Editar perfil</button></div></article>
+          <article className="settings-card cloud-settings-card"><header><span><Cloud size={20} /></span><div><h2>Sincronização e backup</h2><p>Controle a cópia protegida da conta e faça backups quando precisar.</p></div><b className={`sync-badge ${syncStatus}`}>{syncLabel}</b></header><div className="account-line"><span><Cloud size={20} /><span><small>Conta conectada</small><strong>{session.user.email}</strong></span></span></div>{authMessage && <p className="cloud-message" role="status">{authMessage}</p>}<div className="cloud-settings-actions"><button className="button secondary" onClick={syncNow} disabled={syncStatus === "syncing" || syncStatus === "loading"}><RefreshCw size={18} /> Sincronizar agora</button><button className="button secondary" onClick={exportBackup}><Download size={17} /> Exportar backup</button><button className="button secondary" onClick={() => importInput.current?.click()}><Upload size={17} /> Importar backup</button><input ref={importInput} type="file" accept="application/json,.json" onChange={importBackup} hidden /></div><small className="security-note"><Shield size={15} /> Cada usuário acessa somente os próprios dados. Backups importados são validados e limitados a 2 MB.</small></article>
+          <article className="settings-card manage-card"><header><span><Users size={20} /></span><div><h2>Jogadores e ranking</h2><p>Alterar um nome atualiza o cadastro, as escalações e a artilharia. Excluir também remove as pontuações do histórico.</p></div><b>{managedPlayers.length}</b></header>{managedPlayers.length === 0 ? <Empty icon={<Users size={27} />} title="Nenhum jogador cadastrado" text="Os jogadores adicionados aparecerão aqui." /> : <div className="manage-list">{managedPlayers.map((player) => <div className="manage-row" key={player.id}><Avatar name={player.name} />{editingPlayer?.id === player.id ? <input autoFocus maxLength="60" value={editingPlayer.name} onChange={(event) => setEditingPlayer({ ...editingPlayer, name: event.target.value })} onKeyDown={(event) => { if (event.key === "Enter") savePlayerName(); if (event.key === "Escape") setEditingPlayer(null); }} aria-label={`Novo nome de ${player.name}`} /> : <div><strong>{player.name}</strong><small>{player.totalPoints} pontos · {player.totalAssists} assistências{player.registered ? ` · nível ${playerStats.get(player.id)?.rating || 1}★` : " · somente no ranking"}</small></div>}<div className="manage-actions">{editingPlayer?.id === player.id ? <><button className="icon-button save-action" onClick={savePlayerName} aria-label="Salvar nome"><Check size={17} /></button><button className="icon-button" onClick={() => setEditingPlayer(null)} aria-label="Cancelar edição"><X size={17} /></button></> : <button className="icon-button" onClick={() => { setEditingPlayer({ id: player.id, name: player.name }); setSettingsMessage(""); }} aria-label={`Editar ${player.name}`}><Pencil size={16} /></button>}<button className="icon-button danger" onClick={() => deletePlayerEverywhere(player)} aria-label={`Excluir ${player.name}`}><Trash2 size={17} /></button></div></div>)}</div>}</article>
           <article className="settings-card manage-card"><header><span><CalendarDays size={20} /></span><div><h2>Histórico de partidas</h2><p>Edite informações do jogo ou exclua uma partida e suas pontuações.</p></div><b>{data.history.length}</b></header>{data.history.length === 0 ? <Empty icon={<CalendarDays size={27} />} title="Nenhuma partida salva" text="As partidas encerradas aparecerão aqui." /> : <div className="manage-list match-manage-list">{data.history.map((game) => <div className="manage-row match-manage-row" key={game.id}><span className="match-date-badge">{new Date(game.finishedAt || game.date).toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}</span><div><strong>{game.sport}</strong><small>{game.teams?.[0]?.short || "Time 1"} {game.score?.[0] || 0} × {game.score?.[1] || 0} {game.teams?.[1]?.short || "Time 2"} · {(game.events || []).filter((event) => event.type === "goal").length} pontuações registradas</small></div><div className="manage-actions"><button className="icon-button" onClick={() => openMatchEditor(game)} aria-label="Editar partida"><Pencil size={16} /></button><button className="icon-button danger" onClick={() => deleteMatch(game)} aria-label="Excluir partida"><Trash2 size={17} /></button></div></div>)}</div>}</article>
           <button className="button logout-button" onClick={signOut}><LogOut size={18} /> Sair da conta</button>
         </section>}
       </div>
 
-      {goalTeam !== null && match && <Modal onClose={() => { setGoalTeam(null); setGoalScorer(""); setGoalAssist(""); }} icon={<Goal size={25} />} color={match.teams[goalTeam].color} title="Registrar pontuação" text={`Informe quem marcou e, se houver, quem deu a assistência pelo ${match.teams[goalTeam].name}.`}><div className="goal-fields"><div className="field"><label htmlFor="goal-scorer">Autor</label><select id="goal-scorer" value={goalScorer} onChange={(event) => { setGoalScorer(event.target.value); if (event.target.value === goalAssist) setGoalAssist(""); }}><option value="">Selecione o jogador</option>{match.teams[goalTeam].starters.map((player) => <option key={player.id} value={player.id}>{player.name}</option>)}</select></div><div className="field"><label htmlFor="goal-assist">Assistência (opcional)</label><select id="goal-assist" value={goalAssist} onChange={(event) => setGoalAssist(event.target.value)}><option value="">Sem assistência</option>{match.teams[goalTeam].starters.filter((player) => player.id !== goalScorer).map((player) => <option key={player.id} value={player.id}>{player.name}</option>)}</select></div><button className="button primary large full" disabled={!goalScorer} onClick={() => registerGoal(goalTeam, goalScorer, goalAssist)}><Goal size={18} /> Confirmar pontuação</button></div></Modal>}
+      <footer className="site-footer"><strong>Resenha</strong><span>Criado e desenvolvido por Adriel Alves Quintava.</span><small>Projeto em evolução contínua · versão de testes.</small></footer>
+
+      {goalTeam !== null && match && <Modal onClose={() => { setGoalTeam(null); setGoalScorer(""); setGoalAssist(""); }} icon={<Goal size={25} />} color={match.teams[goalTeam].color} title={`Registrar ${scoreAction(match.sport).toLowerCase()}`} text={`Informe quem marcou e, se houver, quem deu a assistência pelo ${match.teams[goalTeam].name}.`}><div className="goal-fields"><div className="field"><label htmlFor="goal-scorer">Autor</label><select id="goal-scorer" value={goalScorer} onChange={(event) => { setGoalScorer(event.target.value); if (event.target.value === goalAssist) setGoalAssist(""); }}><option value="">Selecione o jogador</option>{match.teams[goalTeam].starters.map((player) => <option key={player.id} value={player.id}>{player.name}</option>)}</select></div>{sportKind(match.sport) === "football" && <div className="field"><label htmlFor="goal-assist">Assistência (opcional)</label><select id="goal-assist" value={goalAssist} onChange={(event) => setGoalAssist(event.target.value)}><option value="">Sem assistência</option>{match.teams[goalTeam].starters.filter((player) => player.id !== goalScorer).map((player) => <option key={player.id} value={player.id}>{player.name}</option>)}</select></div>}<button className="button primary large full" disabled={!goalScorer} onClick={() => registerGoal(goalTeam, goalScorer, sportKind(match.sport) === "football" ? goalAssist : "")}><Goal size={18} /> Confirmar {scoreAction(match.sport).toLowerCase()}</button></div></Modal>}
       {subTeam !== null && match && <Modal onClose={() => setSubTeam(null)} icon={<ArrowDownUp size={25} />} color={match.teams[subTeam].color} title="Fazer substituição" text={`Escolha quem sai e quem entra no ${match.teams[subTeam].name}.`}><div className="sub-fields"><div className="field"><label htmlFor="player-out">Sai de quadra</label><select id="player-out" value={selectedOut} onChange={(event) => setSelectedOut(event.target.value)}>{match.teams[subTeam].starters.map((player) => <option key={player.id} value={player.id}>{player.name}</option>)}</select></div><ArrowDownUp size={21} /><div className="field"><label htmlFor="player-in">Entra no jogo</label><select id="player-in" value={selectedIn} onChange={(event) => setSelectedIn(event.target.value)}>{match.teams[subTeam].bench.map((player) => <option key={player.id} value={player.id}>{player.name}</option>)}</select></div></div><button className="button primary large full" onClick={confirmSubstitution}>Confirmar troca</button></Modal>}
-      {profileOpen && <Modal onClose={() => setProfileOpen(false)} icon={<UserRound size={25} />} color="green" title="Meu perfil" text="Personalize o nome e a foto exibidos no Resenha."><form className="profile-form" onSubmit={saveProfile}><div className="profile-photo-editor"><ProfileAvatar name={profileName || displayName} src={profileAvatar} large /><div><button className="button secondary" type="button" onClick={() => profileInput.current?.click()}><Camera size={17} /> Escolher foto</button>{profileAvatar && <button className="text-button danger-text" type="button" onClick={() => setProfileAvatar("")}>Remover foto</button>}<small>JPG, PNG ou WebP · máximo 3 MB. A imagem será reduzida para 512 × 512 e até 350 KB.</small></div><input ref={profileInput} type="file" accept="image/jpeg,image/png,image/webp" onChange={selectProfileImage} hidden /></div><div className="field"><label htmlFor="profile-name">Nome exibido</label><input id="profile-name" maxLength="40" required value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="Como deseja aparecer" /></div>{profileMessage && <p className="cloud-message" role="status">{profileMessage}</p>}<button className="button primary large full" disabled={authBusy}><Save size={18} /> {authBusy ? "Salvando..." : "Salvar perfil"}</button></form></Modal>}
-      {editingMatch && <Modal onClose={() => setEditingMatch(null)} icon={<CalendarDays size={25} />} color="green" title="Editar partida" text="A edição do placar corrige o resultado. O ranking continua sendo calculado pelos autores registrados na súmula."><form className="edit-match-form" onSubmit={saveMatchEdit}><div className="two-fields"><div className="field"><label htmlFor="edit-match-date">Data</label><input id="edit-match-date" type="date" required value={editingMatch.date} onChange={(event) => setEditingMatch({ ...editingMatch, date: event.target.value })} /></div><div className="field"><label htmlFor="edit-match-sport">Esporte</label><select id="edit-match-sport" value={editingMatch.sport} onChange={(event) => setEditingMatch({ ...editingMatch, sport: event.target.value })}>{Object.keys(startersBySport).map((sport) => <option key={sport}>{sport}</option>)}</select></div></div><div className="edit-score-fields"><div className="field"><label htmlFor="edit-score-one">Time 1</label><input id="edit-score-one" type="number" min="0" value={editingMatch.score0} onChange={(event) => setEditingMatch({ ...editingMatch, score0: event.target.value })} /></div><b>×</b><div className="field"><label htmlFor="edit-score-two">Time 2</label><input id="edit-score-two" type="number" min="0" value={editingMatch.score1} onChange={(event) => setEditingMatch({ ...editingMatch, score1: event.target.value })} /></div></div><button className="button primary large full"><Save size={18} /> Salvar alterações</button></form></Modal>}
-      {cloudOpen && <Modal onClose={() => setCloudOpen(false)} icon={<Cloud size={25} />} color="green" title="Conta e sincronização" text="Estes jogadores e históricos pertencem somente a esta conta. Uma cópia também fica protegida neste aparelho para continuar funcionando durante quedas de conexão.">
-        <div className="cloud-account">
-          <div className="account-line"><span><Cloud size={20} /><span><small>Conta conectada</small><strong>{session.user.email}</strong></span></span><b className={`sync-badge ${syncStatus}`}>{syncLabel}</b></div>
-          <button className="button secondary full" onClick={syncNow} disabled={syncStatus === "syncing" || syncStatus === "loading"}><RefreshCw size={18} /> Sincronizar agora</button>
-          <button className="button secondary full" onClick={signOut}><LogOut size={18} /> Salvar e sair da conta</button>
-        </div>
-        {authMessage && <p className="cloud-message" role="status">{authMessage}</p>}
-        <div className="backup-actions"><button className="button secondary" onClick={exportBackup}><Download size={17} /> Exportar backup</button><button className="button secondary" onClick={() => importInput.current?.click()}><Upload size={17} /> Importar backup</button><input ref={importInput} type="file" accept="application/json,.json" onChange={importBackup} hidden /></div>
-      </Modal>}
+      {profileOpen && <Modal onClose={() => setProfileOpen(false)} icon={<UserRound size={25} />} color="green" title="Meu perfil" text="Personalize o nome exibido no Resenha. A inicial é criada automaticamente."><form className="profile-form" onSubmit={saveProfile}><div className="profile-initial-preview"><ProfileAvatar name={profileName || displayName} large /><span><strong>Inicial do perfil</strong><small>Gerada automaticamente a partir do nome.</small></span></div><div className="field"><label htmlFor="profile-name">Nome exibido</label><input id="profile-name" maxLength="40" required value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="Como deseja aparecer" /></div>{profileMessage && <p className="cloud-message" role="status">{profileMessage}</p>}<button className="button primary large full" disabled={authBusy}><Save size={18} /> {authBusy ? "Salvando..." : "Salvar perfil"}</button></form></Modal>}
+      {editingMatch && <Modal onClose={() => setEditingMatch(null)} icon={<CalendarDays size={25} />} color="green" title="Editar partida" text="A edição do placar corrige o resultado. O ranking continua sendo calculado pelos autores registrados na súmula."><form className="edit-match-form" onSubmit={saveMatchEdit}><div className="two-fields"><div className="field"><label htmlFor="edit-match-date">Data</label><input id="edit-match-date" type="date" required value={editingMatch.date} onChange={(event) => setEditingMatch({ ...editingMatch, date: event.target.value })} /></div><div className="field"><label htmlFor="edit-match-sport">Esporte</label><select id="edit-match-sport" value={canonicalSport(editingMatch.sport)} onChange={(event) => setEditingMatch({ ...editingMatch, sport: event.target.value })}>{Object.keys(SPORT_PRESETS).map((sport) => <option key={sport}>{sport}</option>)}</select></div></div><div className="edit-score-fields"><div className="field"><label htmlFor="edit-score-one">Time 1</label><input id="edit-score-one" type="number" min="0" value={editingMatch.score0} onChange={(event) => setEditingMatch({ ...editingMatch, score0: event.target.value })} /></div><b>×</b><div className="field"><label htmlFor="edit-score-two">Time 2</label><input id="edit-score-two" type="number" min="0" value={editingMatch.score1} onChange={(event) => setEditingMatch({ ...editingMatch, score1: event.target.value })} /></div></div><button className="button primary large full"><Save size={18} /> Salvar alterações</button></form></Modal>}
     </main>
   );
 }
@@ -1008,12 +1047,13 @@ function AuthSetupRequired({ theme, setTheme }) {
 }
 
 function Avatar({ name }) { return <span className="avatar">{name.slice(0, 2).toUpperCase()}</span>; }
-function ProfileAvatar({ name, src, large = false }) { return <span className={`profile-avatar ${large ? "large" : ""}`}>{src ? <img src={src} alt="" /> : name.slice(0, 2).toUpperCase()}</span>; }
+function ProfileAvatar({ name, large = false }) { return <span className={`profile-avatar ${large ? "large" : ""}`}>{String(name || "Usuário").trim().charAt(0).toUpperCase() || "U"}</span>; }
 function Stars({ rating, label }) { return <span className="rating-stars" aria-label={label}>{[1, 2, 3, 4, 5].map((star) => <i key={star} className={star <= rating ? "filled" : ""}>★</i>)}</span>; }
 function Pagination({ page, pageCount, onChange }) { return <nav className="pagination" aria-label="Páginas de jogadores"><button type="button" onClick={() => onChange(Math.max(1, page - 1))} disabled={page === 1} aria-label="Página anterior"><ChevronLeft size={18} /></button>{Array.from({ length: pageCount }, (_, index) => index + 1).map((number) => <button type="button" key={number} className={number === page ? "active" : ""} onClick={() => onChange(number)} aria-current={number === page ? "page" : undefined}>{number}</button>)}<button type="button" onClick={() => onChange(Math.min(pageCount, page + 1))} disabled={page === pageCount} aria-label="Próxima página"><ChevronRight size={18} /></button></nav>; }
 function Empty({ icon, title, text }) { return <div className="empty-state">{icon}<strong>{title}</strong><span>{text}</span></div>; }
 function Mode({ active, onClick, icon, title, text }) { return <button type="button" className={active ? "mode active" : "mode"} onClick={onClick}><span>{icon}</span><div><strong>{title}</strong><small>{text}</small></div>{active && <Check size={18} />}</button>; }
+function RankingPanel({ title, eyebrow, ranking, valueKey, valueLabel }) { return <article className="ranking-card"><header><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2></div><Medal size={23} /></header>{ranking.length === 0 ? <Empty icon={<Trophy size={27} />} title="Sem pontuações" text="Os resultados aparecerão depois de uma partida salva." /> : <div className="ranking-list">{ranking.map((player, index) => <div className={`ranking-row rank-${index + 1}`} key={player.id}><span className="rank-number">{index + 1}</span><Avatar name={player.name} /><strong>{player.name}</strong><div className="goal-total"><b>{player[valueKey]}</b><small>{valueLabel}</small></div></div>)}</div>}</article>; }
 function Summary({ icon, label, value }) { return <div><span>{icon}</span><p><small>{label}</small><strong>{value}</strong></p></div>; }
 function TeamScore({ team, score }) { return <div className={`team-score ${team.color}`}>{team.color === "blue" && <span className="team-badge">{team.short}</span>}<div><small>{team.name}</small><strong>{score}</strong></div>{team.color === "orange" && <span className="team-badge">{team.short}</span>}</div>; }
-function TeamCard({ team, onGoal, onSub }) { return <article className={`team-card ${team.color}`}><header><div><span className="team-dot" /><h2>{team.name}</h2></div><button className="button goal-button" onClick={onGoal}><Plus size={18} /> Gol</button></header><div className="roster-title"><span>Em jogo</span><small>{team.starters.length} jogadores</small></div><div className="roster-list">{team.starters.map((player) => <div className="roster-player" key={player.id}><Avatar name={player.name} /><strong>{player.name}</strong><span className="field-status">em jogo</span></div>)}</div><div className="bench-box"><div className="roster-title"><span>Banco</span><small>{team.bench.length} jogadores</small></div>{team.bench.length ? team.bench.map((player) => <div className="roster-player bench-player" key={player.id}><Avatar name={player.name} /><strong>{player.name}</strong></div>) : <p className="empty-bench">Nenhum reserva neste time.</p>}</div><button className="button secondary full" onClick={onSub} disabled={!team.bench.length}><ArrowDownUp size={18} /> Fazer substituição</button></article>; }
+function TeamCard({ team, scoreLabel, onGoal, onSub }) { return <article className={`team-card ${team.color}`}><header><div><span className="team-dot" /><h2>{team.name}</h2></div><button className="button goal-button" onClick={onGoal}><Plus size={18} /> {scoreLabel}</button></header><div className="roster-title"><span>Em jogo</span><small>{team.starters.length} jogadores</small></div><div className="roster-list">{team.starters.map((player) => <div className="roster-player" key={player.id}><Avatar name={player.name} /><strong>{player.name}</strong><span className="field-status">em jogo</span></div>)}</div><div className="bench-box"><div className="roster-title"><span>Banco</span><small>{team.bench.length} jogadores</small></div>{team.bench.length ? team.bench.map((player) => <div className="roster-player bench-player" key={player.id}><Avatar name={player.name} /><strong>{player.name}</strong></div>) : <p className="empty-bench">Nenhum reserva neste time.</p>}</div><button className="button secondary full" onClick={onSub} disabled={!team.bench.length}><ArrowDownUp size={18} /> Fazer substituição</button></article>; }
 function Modal({ onClose, icon, color, title, text, children }) { return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="modal" role="dialog" aria-modal="true" aria-label={title}><button className="icon-button modal-close" onClick={onClose}><X size={18} /></button><span className={`modal-icon ${color}`}>{icon}</span><h2>{title}</h2><p>{text}</p>{children}</div></div>; }

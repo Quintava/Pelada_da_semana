@@ -9,6 +9,8 @@ Esta configuração é necessária para liberar a tela de login e manter os dado
 3. No painel do projeto, abra **SQL Editor**.
 4. Copie todo o conteúdo de `supabase/schema.sql`, cole no editor e clique em **Run**.
 
+Se o projeto já estava configurado, execute o arquivo novamente depois desta atualização. Ele mantém os dados existentes e reforça a segurança removendo qualquer permissão direta do papel anônimo.
+
 ## 2. Localizar a URL do projeto
 
 Na interface atual do Supabase, a URL pode não aparecer diretamente na tela inicial.

@@ -28,27 +28,48 @@ Se uma tentativa antiga deixou uma pasta `node_modules` incompleta, apague somen
 - tempo e quantidade de titulares configuráveis;
 - cronômetro regressivo, placar, autor dos gols e assistências;
 - titulares, banco e substituições durante a partida;
-- súmula com minuto de cada lance e correção de gol;
+- súmula com minuto de cada lance e botão visível para anular uma pontuação lançada por engano;
 - histórico de partidas e artilharia separada por mês;
 - salvamento automático no navegador;
-- sincronização opcional com Supabase entre celulares;
+- sincronização com Supabase entre celulares, organizada dentro das configurações;
 - tela inicial obrigatória de login;
 - contas protegidas por e-mail e senha;
 - recuperação de senha por link enviado ao e-mail;
-- perfil individual com nome e foto sincronizados;
-- compressão automática da foto de perfil para até 350 KB;
+- perfil individual com nome e inicial gerada automaticamente;
 - menu hambúrguer com as áreas esportivas do aplicativo;
 - menu de conta com perfil, configurações, troca de senha e saída;
 - alteração de senha com validação da senha atual e confirmação da nova;
-- edição ou exclusão de jogadores, inclusive nomes existentes somente no ranking;
+- edição ou exclusão de jogadores somente nas configurações, com confirmação antes de apagar;
 - edição e exclusão de partidas salvas;
 - jogadores e históricos separados por usuário;
 - exportação e importação de backup em JSON;
 - modo claro e modo escuro com preferência salva.
 - página de evolução mensal por jogador, com presenças, pontuações, assistências, média e nível de cada partida;
-- modo treino com cronograma semanal, exercícios por tempo ou repetições, cronômetro e histórico de atividades concluídas.
+- página de evolução mensal redesenhada, com seleção destacada de atleta e período;
+- Futebol, Futebol Society e Futebol de Salão com rankings geral, de assistências e de gols;
+- Vôlei com ranking exclusivo de pontos e Basquete com ranking de cestas;
+- configuração automática de jogadores e tempo ao selecionar cada modalidade, mantendo os campos editáveis;
+- modo treino com cronograma semanal, exercícios por tempo ou repetições e histórico de atividades concluídas;
+- exercícios cronometrados em segundos, minutos ou horas;
+- checklist e cronômetro independente para cada exercício;
+- página de estatísticas de treino com frequência, volume, tempo e repetições.
 
 O login depende do Supabase. Para configurar o banco e a autenticação, siga o arquivo `CONFIGURAR_SUPABASE.md`.
+
+## Segurança
+
+- o site usa apenas a chave pública do Supabase no navegador;
+- a tabela possui RLS e políticas que restringem cada linha ao dono da conta;
+- o papel anônimo não recebe acesso à tabela do aplicativo;
+- nenhuma chave `service_role` ou `sb_secret_` deve ser colocada no GitHub;
+- backups importados são validados, possuem limite de 2 MB e exigem confirmação;
+- o HTML inclui uma política de conteúdo que bloqueia scripts e conexões fora das origens permitidas.
+
+Ao atualizar uma instalação existente, execute novamente o conteúdo de `supabase/schema.sql` no SQL Editor para aplicar o bloqueio explícito do papel anônimo. O script pode ser executado novamente sem apagar os dados existentes.
+
+## Sugestões automáticas por esporte
+
+Ao selecionar uma modalidade, o aplicativo preenche automaticamente a quantidade de jogadores em jogo e a duração sugerida: Futebol (11 e 20 minutos), Futebol Society (5 e 10 minutos), Futebol de Salão (5 e 10 minutos), Vôlei (2 e 15 minutos), Basquete (5 e 10 minutos) e Handebol (7 e 20 minutos). Esses dois campos continuam editáveis.
 
 ## Como funciona o nível
 

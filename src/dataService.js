@@ -132,4 +132,4 @@ export async function getPublicSettings(userId, title) {
 export async function setPublicEnabled(userId, enabled) { fail((await supabase.from("public_pages").update({ enabled, updated_at: new Date().toISOString() }).eq("user_id", userId)).error); }
 export async function addUpcomingGame(userId, game) { fail((await supabase.from("upcoming_games").insert({ user_id: userId, ...game })).error); }
 export async function deleteUpcomingGame(userId, id) { fail((await supabase.from("upcoming_games").delete().eq("user_id", userId).eq("id", id)).error); }
-export async function getPublicPage(slug, offset = 0) { const { data, error } = await supabase.rpc("get_public_resenha", { target_slug: slug, result_offset: offset, result_limit: HISTORY_PAGE_SIZE }); fail(error); return data; }
+export async function getPublicPage(slug, offset = 0, sport = "Futebol de Salão") { const { data, error } = await supabase.rpc("get_public_resenha", { target_slug: slug, result_offset: offset, result_limit: HISTORY_PAGE_SIZE, target_sport: sport }); fail(error); return data; }

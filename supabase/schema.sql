@@ -50,32 +50,45 @@ declare page_row public.public_pages; begin
   return to_jsonb(page_row);
 end $$;
 
-create or replace function public.get_public_resenha(target_slug text,result_offset integer default 0,result_limit integer default 10) returns jsonb language sql stable security definer set search_path=public as $$
+drop function if exists public.get_public_resenha(text,integer,integer);
+drop function if exists public.get_public_resenha(text,integer,integer,text);
+create function public.get_public_resenha(target_slug text,result_offset integer default 0,result_limit integer default 10,target_sport text default 'Futebol de Salão') returns jsonb language sql stable security definer set search_path=public as $$
 with page as (select * from public_pages where slug=target_slug and enabled=true limit 1),
-goals as (
-  select e.player_id id,max(e.player_name) name,count(*)::int goals
-  from user_match_events e join page p on p.user_id=e.user_id
-  where e.event_type='goal' and exists(select 1 from user_matches m where m.user_id=e.user_id and m.id=e.match_id)
-  group by e.player_id
-), assists as (
-  select e.assist_player_id id,max(e.assist_player_name) name,count(*)::int assists
-  from user_match_events e join page p on p.user_id=e.user_id
-  where e.event_type='goal' and e.assist_player_id is not null and exists(select 1 from user_matches m where m.user_id=e.user_id and m.id=e.match_id)
-  group by e.assist_player_id
+matches as (
+  select m.* from user_matches m join page p on p.user_id=m.user_id
+  where case when m.payload->>'sport'='Futsal' then 'Futebol de Salão' else coalesce(m.payload->>'sport','') end=target_sport
+), roster as (
+  select m.id match_id,m.payload,player->>'id' id,max(player->>'name') name,(team_position-1)::int team_index
+  from matches m
+  cross join lateral jsonb_array_elements(coalesce(m.payload->'teams','[]'::jsonb)||coalesce(m.payload->'reserveTeams','[]'::jsonb)) with ordinality as t(team,team_position)
+  cross join lateral jsonb_array_elements(coalesce(team->'starters','[]'::jsonb)||coalesce(team->'bench','[]'::jsonb)) player
+  group by m.id,m.payload,player->>'id',team_position
+), performance as (
+  select r.match_id,r.id,r.name,
+    count(e.id) filter(where e.event_type='goal' and e.player_id=r.id)::int goals,
+    count(e.id) filter(where e.event_type='goal' and e.assist_player_id=r.id)::int assists,
+    least(10,6+
+      count(e.id) filter(where e.event_type='goal' and e.player_id=r.id)*case when target_sport in ('Futebol','Futebol Society','Futebol de Salão') then .8 when target_sport='Vôlei' then .35 when target_sport='Basquete' then .25 else .5 end+
+      count(e.id) filter(where e.event_type='goal' and e.assist_player_id=r.id)*case when target_sport in ('Futebol','Futebol Society','Futebol de Salão') then .5 else 0 end+
+      case when r.team_index not in (0,1) then 0 when coalesce((r.payload->'score'->>r.team_index)::numeric,0)>coalesce((r.payload->'score'->>(1-r.team_index))::numeric,0) then .4 when coalesce((r.payload->'score'->>r.team_index)::numeric,0)=coalesce((r.payload->'score'->>(1-r.team_index))::numeric,0) then .2 else 0 end
+    )::numeric score
+  from roster r left join user_match_events e on e.match_id=r.match_id and e.user_id=(select user_id from page)
+  group by r.match_id,r.id,r.name,r.payload,r.team_index
 ), ranking as (
-  select coalesce(g.id,a.id) id,coalesce(g.name,a.name) name,coalesce(g.goals,0) goals,coalesce(a.assists,0) assists,coalesce(g.goals,0)+coalesce(a.assists,0) total
-  from goals g full join assists a on a.id=g.id
+  select id,max(name) name,sum(goals)::int goals,sum(assists)::int assists,count(*)::int games,round(avg(score),1) evaluation
+  from performance group by id
 )
 select case when not exists(select 1 from page) then null else jsonb_build_object(
   'page',(select jsonb_build_object('title',title,'slug',slug) from page),
-  'ranking',coalesce((select jsonb_agg(to_jsonb(r) order by r.total desc,r.goals desc,r.name) from ranking r),'[]'::jsonb),
+  'sport',target_sport,
+  'ranking',coalesce((select jsonb_agg(to_jsonb(r) order by r.evaluation desc,r.goals desc,r.assists desc,r.name) from ranking r),'[]'::jsonb),
   'upcoming',coalesce((select jsonb_agg(jsonb_build_object('id',g.id,'title',g.title,'sport',g.sport,'scheduled_at',g.scheduled_at,'location',g.location) order by g.scheduled_at) from upcoming_games g join page p on p.user_id=g.user_id where g.scheduled_at>=now()),'[]'::jsonb),
-  'results',coalesce((select jsonb_agg(x.payload order by x.finished_at desc) from (select m.payload,m.finished_at from user_matches m join page p on p.user_id=m.user_id order by m.finished_at desc offset greatest(result_offset,0) limit least(greatest(result_limit,1),20)) x),'[]'::jsonb),
-  'has_more',(select count(*)>greatest(result_offset,0)+least(greatest(result_limit,1),20) from user_matches m join page p on p.user_id=m.user_id)
+  'results',coalesce((select jsonb_agg(x.payload order by x.finished_at desc) from (select m.payload,m.finished_at from matches m order by m.finished_at desc offset greatest(result_offset,0) limit least(greatest(result_limit,1),20)) x),'[]'::jsonb),
+  'has_more',(select count(*)>greatest(result_offset,0)+least(greatest(result_limit,1),20) from matches)
 ) end
 $$;
 
 revoke execute on function public.ensure_public_page(text) from public,anon;
 grant execute on function public.ensure_public_page(text) to authenticated;
-revoke execute on function public.get_public_resenha(text,integer,integer) from public;
-grant execute on function public.get_public_resenha(text,integer,integer) to anon,authenticated;
+revoke execute on function public.get_public_resenha(text,integer,integer,text) from public;
+grant execute on function public.get_public_resenha(text,integer,integer,text) to anon,authenticated;

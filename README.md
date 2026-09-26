@@ -18,7 +18,7 @@ Se uma tentativa antiga deixou uma pasta `node_modules` incompleta, apague somen
 ## Recursos
 
 - cadastro de jogadores sem avaliação manual;
-- nível geral automático de 1 a 5 estrelas, calculado pela média de gols/pontos por partida;
+- nível geral automático de 1 a 5 estrelas, baseado em uma avaliação esportiva de 0 a 10;
 - nível do último jogo para acompanhar a evolução recente;
 - confirmação de presença antes de cada partida;
 - registro de presença no histórico de cada jogo;
@@ -27,7 +27,9 @@ Se uma tentativa antiga deixou uma pasta `node_modules` incompleta, apague somen
 - pódio dos três melhores pontuadores do último jogo;
 - tempo e quantidade de titulares configuráveis;
 - cronômetro regressivo, placar, autor dos gols e assistências;
-- titulares, banco e substituições durante a partida;
+- titulares, banco, substituições e até 4 times de fora durante a resenha;
+- salvamento de cada partida sem perder a escalação, deixando a rodada seguinte pronta;
+- troca de um time completo por outro da fila e encerramento separado da sessão;
 - súmula com minuto de cada lance e botão visível para anular uma pontuação lançada por engano;
 - histórico de partidas e artilharia separada por mês;
 - salvamento automático no navegador;
@@ -55,7 +57,9 @@ Se uma tentativa antiga deixou uma pasta `node_modules` incompleta, apague somen
 - página de estatísticas de treino com frequência, volume, tempo e repetições.
 - sincronização incremental: um novo gol cria somente o registro daquele lance, sem reenviar o histórico;
 - histórico carregado em páginas de 10 partidas;
-- página pública somente para leitura com ranking, próximos jogos e resultados.
+- Mural da Resenha somente para leitura, com ranking por esporte, próximos jogos e resultados;
+- classificação completa por esporte com pontuações, assistências, presenças e avaliação geral;
+- estatísticas organizadas em páginas internas separadas para classificação, pontuadores e resultados.
 
 O login depende do Supabase. Para configurar o banco e a autenticação, siga o arquivo `CONFIGURAR_SUPABASE.md`.
 
@@ -74,9 +78,13 @@ Ao atualizar uma instalação existente, execute novamente todo o conteúdo de `
 
 Ao selecionar uma modalidade, o aplicativo preenche automaticamente a quantidade de jogadores em jogo e a duração sugerida: Futebol (11 e 20 minutos), Futebol Society (5 e 10 minutos), Futebol de Salão (5 e 10 minutos), Vôlei (2 e 15 minutos), Basquete (5 e 10 minutos) e Handebol (7 e 20 minutos). Esses dois campos continuam editáveis.
 
-## Como funciona o nível
+## Como funciona a avaliação
 
-O nível geral usa a média de gols/pontos por partida salva no histórico: menos de 0,25 vale 1 estrela; de 0,25 a 0,74 vale 2; de 0,75 a 1,24 vale 3; de 1,25 a 1,99 vale 4; e 2 ou mais vale 5 estrelas. O nível de uma partida começa em 1 estrela sem pontuação e recebe uma estrela adicional por gol/ponto, até o limite de 5.
+Cada presença começa com nota 6,0. Futebol soma 0,8 por gol e 0,5 por assistência; Vôlei soma 0,35 por ponto; Basquete soma 0,25 por cesta; as demais modalidades somam 0,5 por ponto. O resultado acrescenta 0,4 na vitória ou 0,2 no empate, com limite de 10. A avaliação geral é a média das partidas e vira estrelas: abaixo de 6 vale 1; de 6 a 6,9 vale 2; de 7 a 7,9 vale 3; de 8 a 8,9 vale 4; e a partir de 9 vale 5.
+
+## Rodadas da mesma resenha
+
+Use **Salvar partida e continuar** ao final de cada jogo curto. O resultado entra no histórico e uma nova partida é aberta com a mesma escalação, bancos e times de fora. Use **Encerrar resenha** somente quando o período inteiro de jogos terminar.
 
 ## Recuperação de senha
 

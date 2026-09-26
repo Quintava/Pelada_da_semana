@@ -19,6 +19,8 @@ Se uma tentativa antiga deixou uma pasta `node_modules` incompleta, apague somen
 
 - cadastro de jogadores sem avaliação manual;
 - nível geral automático de 1 a 5 estrelas, baseado em uma avaliação esportiva de 0 a 10;
+- avaliação acumulada salva no cadastro, considerando inclusive as partidas antigas;
+- sorteio equilibrado pela média decimal de desempenho, com nota neutra para estreantes;
 - nível do último jogo para acompanhar a evolução recente;
 - confirmação de presença antes de cada partida;
 - registro de presença no histórico de cada jogo;
@@ -27,6 +29,8 @@ Se uma tentativa antiga deixou uma pasta `node_modules` incompleta, apague somen
 - pódio dos três melhores pontuadores do último jogo;
 - tempo e quantidade de titulares configuráveis;
 - cronômetro regressivo, placar, autor dos gols e assistências;
+- placar ampliado com faixa de autores, minutos e assistências das pontuações;
+- registro de gol contra e pênalti perdido, com correção pela súmula;
 - titulares, banco, substituições e até 4 times de fora durante a resenha;
 - salvamento de cada partida sem perder a escalação, deixando a rodada seguinte pronta;
 - troca de um time completo por outro da fila e encerramento separado da sessão;
@@ -63,6 +67,30 @@ Se uma tentativa antiga deixou uma pasta `node_modules` incompleta, apague somen
 
 O login depende do Supabase. Para configurar o banco e a autenticação, siga o arquivo `CONFIGURAR_SUPABASE.md`.
 
+## Organização do código
+
+- `src/App.jsx`: regras do aplicativo, navegação e componentes da área autenticada;
+- `src/PublicPage.jsx`: Mural da Resenha, público e somente para leitura;
+- `src/dataService.js`: leitura, paginação e sincronização incremental com o Supabase;
+- `src/supabase.js`: criação e configuração segura do cliente Supabase;
+- `src/styles.css`: temas, componentes visuais e responsividade;
+- `supabase/schema.sql`: tabelas, políticas de segurança e funções públicas do banco;
+- `public/`: ícones, manifesto e arquivos estáticos.
+
+Os comentários indicam responsabilidades, regras de negócio e pontos de segurança sem repetir instruções óbvias.
+
+Para conferir a formatação sem alterar arquivos:
+
+```bash
+npm run format:check
+```
+
+Para formatar novamente todo o projeto:
+
+```bash
+npm run format
+```
+
 ## Segurança
 
 - o site usa apenas a chave pública do Supabase no navegador;
@@ -80,7 +108,9 @@ Ao selecionar uma modalidade, o aplicativo preenche automaticamente a quantidade
 
 ## Como funciona a avaliação
 
-Cada presença começa com nota 6,0. Futebol soma 0,8 por gol e 0,5 por assistência; Vôlei soma 0,35 por ponto; Basquete soma 0,25 por cesta; as demais modalidades somam 0,5 por ponto. O resultado acrescenta 0,4 na vitória ou 0,2 no empate, com limite de 10. A avaliação geral é a média das partidas e vira estrelas: abaixo de 6 vale 1; de 6 a 6,9 vale 2; de 7 a 7,9 vale 3; de 8 a 8,9 vale 4; e a partir de 9 vale 5.
+Cada presença começa com nota 6,0. Futebol soma 0,8 por gol e 0,5 por assistência; Vôlei soma 0,35 por ponto; Basquete soma 0,25 por cesta; as demais modalidades somam 0,5 por ponto. O resultado acrescenta 0,4 na vitória ou 0,2 no empate e desconta 0,2 na derrota. Gol contra desconta 0,5 e pênalti perdido desconta 0,3. A nota permanece entre 0 e 10. A avaliação geral é a média das partidas e vira estrelas: abaixo de 6 vale 1; de 6 a 6,9 vale 2; de 7 a 7,9 vale 3; de 8 a 8,9 vale 4; e a partir de 9 vale 5.
+
+O cadastro guarda partidas avaliadas, pontuações, assistências, soma das notas e média geral. Na primeira abertura desta versão, os acumulados são reconstruídos automaticamente usando todo o histórico da conta. O sorteio equilibrado usa a média numérica completa; jogadores ainda sem partida entram provisoriamente com nota neutra 6,0.
 
 ## Rodadas da mesma resenha
 

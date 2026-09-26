@@ -1,139 +1,135 @@
 import { supabase } from "./supabase";
 
+export const HISTORY_PAGE_SIZE = 10;
 const fingerprints = new Map();
 const json = (value) => JSON.stringify(value ?? null);
 const fail = (error) => { if (error) throw error; };
+const withoutEvents = (match) => match ? { ...match, events: undefined } : null;
+const activePayload = (match) => match ? { ...match, events: undefined, score: undefined } : null;
+const coreOf = (state) => ({ profile: state.profile, players: state.players, settings: state.settings, trainingPlans: state.trainingPlans || [], trainingHistory: state.trainingHistory || [], activeTraining: state.activeTraining || null });
+const eventsOf = (state) => {
+  const result = [];
+  if (state.activeMatch) (state.activeMatch.events || []).forEach((event) => result.push({ matchId: state.activeMatch.id, event }));
+  (state.history || []).forEach((match) => (match.events || []).forEach((event) => result.push({ matchId: match.id, event })));
+  return result;
+};
+const eventKey = (matchId, id) => `${matchId}:${id}`;
+const eventRow = (userId, matchId, event) => ({ user_id: userId, match_id: matchId, id: event.id, event_type: event.type, player_id: event.playerId || null, player_name: event.playerName || null, assist_player_id: event.assistPlayerId || null, assist_player_name: event.assistPlayerName || null, payload: event });
 
-function rowsToState(rows) {
-  const { profile, settings, players, matches, activeMatch, plans, sessions, activeTraining } = rows;
-  return {
-    profile: { displayName: profile?.display_name || "" },
-    settings: settings?.data || {},
-    players: (players || []).map(({ id, name }) => ({ id, name })),
-    history: (matches || []).map((row) => row.payload),
-    activeMatch: activeMatch?.payload || null,
-    trainingPlans: (plans || []).map((row) => row.payload),
-    trainingHistory: (sessions || []).map((row) => row.payload),
-    activeTraining: activeTraining?.payload || null,
-  };
-}
-
-function remember(key, state) {
-  fingerprints.set(key, {
-    profile: json(state.profile), settings: json(state.settings),
-    players: new Map(state.players.map((item) => [item.id, json(item)])),
-    matches: new Map(state.history.map((item) => [item.id, json(item)])),
-    activeMatch: json(state.activeMatch),
-    plans: new Map((state.trainingPlans || []).map((item) => [item.id, json(item)])),
-    sessions: new Map((state.trainingHistory || []).map((item) => [item.id, json(item)])),
-    activeTraining: json(state.activeTraining),
+function remember(userId, state) {
+  fingerprints.set(userId, {
+    core: json(coreOf(state)),
+    active: json(activePayload(state.activeMatch)),
+    matches: new Map((state.history || []).map((match) => [match.id, json(withoutEvents(match))])),
+    events: new Map(eventsOf(state).map(({ matchId, event }) => [eventKey(matchId, event.id), json(event)])),
   });
 }
 
-export async function bootstrapWorkspace(userId, fallbackName) {
-  const { data: defaultId, error: ensureError } = await supabase.rpc("ensure_default_group", { group_name: `${fallbackName || "Minha"} · Resenha` });
-  fail(ensureError);
-  const groups = await listGroups();
-  return { groups, activeGroupId: groups.some((item) => item.id === defaultId) ? defaultId : groups[0]?.id };
+function attachEvents(matches, eventRows) {
+  const grouped = new Map();
+  (eventRows || []).forEach((row) => { const list = grouped.get(row.match_id) || []; list.push(row.payload); grouped.set(row.match_id, list); });
+  return matches.map((row) => ({ ...row.payload, events: (grouped.get(row.id) || []).sort((a, b) => String(b.id).localeCompare(String(a.id))) }));
 }
 
-export async function listGroups() {
-  const { data, error } = await supabase.from("group_members").select("group_id,role,joined_at,group:groups(id,name,invite_code,public_slug,is_public,owner_id)").order("joined_at");
+async function fetchMatchPage(userId, offset = 0) {
+  const { data: fetched, error } = await supabase.from("user_matches").select("id,payload,finished_at").eq("user_id", userId).order("finished_at", { ascending: false }).range(offset, offset + HISTORY_PAGE_SIZE);
   fail(error);
-  return (data || []).filter((row) => row.group).map((row) => ({ ...row.group, role: row.role }));
+  const rows = (fetched || []).slice(0, HISTORY_PAGE_SIZE);
+  const ids = (rows || []).map((row) => row.id);
+  let eventRows = [];
+  if (ids.length) {
+    const response = await supabase.from("user_match_events").select("match_id,payload").eq("user_id", userId).in("match_id", ids);
+    fail(response.error); eventRows = response.data || [];
+  }
+  return { history: attachEvents(rows, eventRows), hasMore: (fetched || []).length > HISTORY_PAGE_SIZE };
 }
 
-export async function loadWorkspace(groupId, userId, defaults) {
-  const requests = await Promise.all([
-    supabase.from("profiles").select("display_name").eq("user_id", userId).maybeSingle(),
-    supabase.from("group_settings").select("data").eq("group_id", groupId).maybeSingle(),
-    supabase.from("players").select("id,name").eq("group_id", groupId).order("created_at"),
-    supabase.from("matches").select("id,payload,finished_at").eq("group_id", groupId).order("finished_at", { ascending: false }),
-    supabase.from("active_matches").select("payload").eq("group_id", groupId).maybeSingle(),
-    supabase.from("training_plans").select("id,payload").eq("user_id", userId),
-    supabase.from("training_sessions").select("id,payload,finished_at").eq("user_id", userId).order("finished_at", { ascending: false }),
-    supabase.from("active_trainings").select("payload").eq("user_id", userId).maybeSingle(),
+export async function loadWorkspace(userId, defaults) {
+  const [coreResult, activeResult, page] = await Promise.all([
+    supabase.from("user_core").select("data").eq("user_id", userId).maybeSingle(),
+    supabase.from("user_active_matches").select("payload").eq("user_id", userId).maybeSingle(),
+    fetchMatchPage(userId, 0),
   ]);
-  requests.forEach(({ error }) => fail(error));
-  let state = rowsToState({ profile: requests[0].data, settings: requests[1].data, players: requests[2].data, matches: requests[3].data, activeMatch: requests[4].data, plans: requests[5].data, sessions: requests[6].data, activeTraining: requests[7].data });
-  state = { ...defaults, ...state, profile: { ...defaults.profile, ...state.profile }, settings: { ...defaults.settings, ...state.settings } };
+  fail(coreResult.error); fail(activeResult.error);
+  let core = coreResult.data?.data;
+  let activeMatch = activeResult.data?.payload || null;
+  let history = page.history;
 
-  if (!state.players.length && !state.history.length) {
-    const { data: legacy } = await supabase.from("app_state").select("data").eq("user_id", userId).maybeSingle();
-    if (legacy?.data && ((legacy.data.players || []).length || (legacy.data.history || []).length)) {
-      state = { ...defaults, ...legacy.data, profile: { displayName: legacy.data.profile?.displayName || "" }, settings: { ...defaults.settings, ...(legacy.data.settings || {}) } };
-      await saveWorkspace(groupId, userId, state, true);
+  if (!core) {
+    const { data: legacy, error } = await supabase.from("app_state").select("data").eq("user_id", userId).maybeSingle();
+    fail(error);
+    if (legacy?.data) {
+      const migrated = { ...defaults, ...legacy.data, profile: { ...defaults.profile, ...(legacy.data.profile || {}) }, settings: { ...defaults.settings, ...(legacy.data.settings || {}) } };
+      await saveWorkspace(userId, migrated, true);
+      core = coreOf(migrated);
+      activeMatch = migrated.activeMatch || null;
+      history = (migrated.history || []).slice(0, HISTORY_PAGE_SIZE);
+      page.hasMore = (migrated.history || []).length > HISTORY_PAGE_SIZE;
     }
   }
-  remember(`${userId}:${groupId}`, state);
-  return state;
+
+  if (activeMatch) {
+    const { data: activeEvents, error } = await supabase.from("user_match_events").select("payload").eq("user_id", userId).eq("match_id", activeMatch.id);
+    fail(error);
+    const events = (activeEvents || []).map((row) => row.payload);
+    const score = events.reduce((total, event) => { if (event.type === "goal" && (event.teamIndex === 0 || event.teamIndex === 1)) total[event.teamIndex] += 1; return total; }, [0, 0]);
+    activeMatch = { ...activeMatch, score, events };
+  }
+  const state = { ...defaults, ...(core || {}), profile: { ...defaults.profile, ...(core?.profile || {}) }, settings: { ...defaults.settings, ...(core?.settings || {}) }, activeMatch, history };
+  remember(userId, state);
+  return { state, hasMore: page.hasMore };
 }
 
-async function syncRows({ table, ownerColumn, ownerId, items, map, rowOf }) {
-  const changed = items.filter((item) => map.get(item.id) !== json(item));
-  if (changed.length) {
-    const { error } = await supabase.from(table).upsert(changed.map((item) => rowOf(item)));
-    fail(error);
+export async function loadMoreHistory(userId, offset) {
+  const page = await fetchMatchPage(userId, offset);
+  const previous = fingerprints.get(userId);
+  if (previous) {
+    page.history.forEach((match) => {
+      previous.matches.set(match.id, json(withoutEvents(match)));
+      (match.events || []).forEach((event) => previous.events.set(eventKey(match.id, event.id), json(event)));
+    });
   }
-  const removed = [...map.keys()].filter((id) => !items.some((item) => item.id === id));
-  if (removed.length) {
-    const { error } = await supabase.from(table).delete().eq(ownerColumn, ownerId).in("id", removed);
-    fail(error);
-  }
+  return page;
 }
 
-export async function saveWorkspace(groupId, userId, state, force = false) {
-  const key = `${userId}:${groupId}`;
-  const previous = fingerprints.get(key) || { players: new Map(), matches: new Map(), plans: new Map(), sessions: new Map() };
+export async function loadAllHistory(userId) {
+  const all = []; let offset = 0; let hasMore = true;
+  while (hasMore) { const page = await fetchMatchPage(userId, offset); all.push(...page.history); hasMore = page.hasMore; offset += HISTORY_PAGE_SIZE; }
+  return all;
+}
+
+export async function saveWorkspace(userId, state, force = false) {
+  const previous = fingerprints.get(userId) || { core: "", active: "", matches: new Map(), events: new Map() };
   const now = new Date().toISOString();
-  if (force || previous.profile !== json(state.profile)) fail((await supabase.from("profiles").upsert({ user_id: userId, display_name: state.profile?.displayName || "", updated_at: now })).error);
-  if (force || previous.settings !== json(state.settings)) fail((await supabase.from("group_settings").upsert({ group_id: groupId, data: state.settings, updated_at: now })).error);
-  await syncRows({ table: "players", ownerColumn: "group_id", ownerId: groupId, items: state.players, map: force ? new Map() : previous.players, rowOf: (item) => ({ group_id: groupId, id: item.id, name: item.name, updated_at: now }) });
-  await syncRows({ table: "matches", ownerColumn: "group_id", ownerId: groupId, items: state.history, map: force ? new Map() : previous.matches, rowOf: (item) => ({ group_id: groupId, id: item.id, payload: item, finished_at: item.finishedAt || item.date || now, updated_at: now }) });
-  await syncRows({ table: "training_plans", ownerColumn: "user_id", ownerId: userId, items: state.trainingPlans || [], map: force ? new Map() : previous.plans, rowOf: (item) => ({ user_id: userId, id: item.id, payload: item, updated_at: now }) });
-  await syncRows({ table: "training_sessions", ownerColumn: "user_id", ownerId: userId, items: state.trainingHistory || [], map: force ? new Map() : previous.sessions, rowOf: (item) => ({ user_id: userId, id: item.id, payload: item, finished_at: item.finishedAt || now }) });
+  const core = coreOf(state);
+  if (force || previous.core !== json(core)) fail((await supabase.from("user_core").upsert({ user_id: userId, data: core, updated_at: now })).error);
 
-  if (previous.activeMatch !== json(state.activeMatch) || force) {
-    if (state.activeMatch) fail((await supabase.from("active_matches").upsert({ group_id: groupId, payload: state.activeMatch, updated_at: now })).error);
-    else fail((await supabase.from("active_matches").delete().eq("group_id", groupId)).error);
+  const active = activePayload(state.activeMatch);
+  if (force || previous.active !== json(active)) {
+    if (active) fail((await supabase.from("user_active_matches").upsert({ user_id: userId, payload: active, updated_at: now })).error);
+    else fail((await supabase.from("user_active_matches").delete().eq("user_id", userId)).error);
   }
-  if (previous.activeTraining !== json(state.activeTraining) || force) {
-    if (state.activeTraining) fail((await supabase.from("active_trainings").upsert({ user_id: userId, payload: state.activeTraining, updated_at: now })).error);
-    else fail((await supabase.from("active_trainings").delete().eq("user_id", userId)).error);
-  }
-  remember(key, state);
+
+  const currentMatches = new Map((state.history || []).map((match) => [match.id, match]));
+  const changedMatches = [...currentMatches.values()].filter((match) => force || previous.matches.get(match.id) !== json(withoutEvents(match)));
+  if (changedMatches.length) fail((await supabase.from("user_matches").upsert(changedMatches.map((match) => ({ user_id: userId, id: match.id, payload: withoutEvents(match), finished_at: match.finishedAt || match.date || now, updated_at: now })))).error);
+  const removedMatches = [...previous.matches.keys()].filter((id) => !currentMatches.has(id));
+  if (removedMatches.length) fail((await supabase.from("user_matches").delete().eq("user_id", userId).in("id", removedMatches)).error);
+
+  const currentEvents = new Map(eventsOf(state).map((item) => [eventKey(item.matchId, item.event.id), item]));
+  const changedEvents = [...currentEvents.values()].filter(({ matchId, event }) => force || previous.events.get(eventKey(matchId, event.id)) !== json(event));
+  if (changedEvents.length) fail((await supabase.from("user_match_events").upsert(changedEvents.map(({ matchId, event }) => eventRow(userId, matchId, event)))).error);
+  const removedEvents = [...previous.events.keys()].filter((key) => !currentEvents.has(key));
+  for (const key of removedEvents) { const separator = key.lastIndexOf(":"); const matchId = key.slice(0, separator); const id = key.slice(separator + 1); fail((await supabase.from("user_match_events").delete().eq("user_id", userId).eq("match_id", matchId).eq("id", id)).error); }
+  remember(userId, state);
 }
 
-export async function createGroup(name) { const { data, error } = await supabase.rpc("create_group", { group_name: name }); fail(error); return data; }
-export async function joinGroup(code) { const { data, error } = await supabase.rpc("join_group", { code }); fail(error); return data; }
-export async function updateGroup(groupId, values) { const { error } = await supabase.from("groups").update({ ...values, updated_at: new Date().toISOString() }).eq("id", groupId); fail(error); }
-export async function leaveGroup(groupId, userId) { const { error } = await supabase.from("group_members").delete().eq("group_id", groupId).eq("user_id", userId); fail(error); }
-
-export async function listMembers(groupId) {
-  const { data, error } = await supabase.from("group_members").select("user_id,role,joined_at").eq("group_id", groupId).order("joined_at"); fail(error);
-  const ids = (data || []).map((item) => item.user_id);
-  const profiles = ids.length ? (await supabase.from("profiles").select("user_id,display_name").in("user_id", ids)).data || [] : [];
-  return (data || []).map((item) => ({ ...item, displayName: profiles.find((profile) => profile.user_id === item.user_id)?.display_name || "Participante" }));
+export async function getPublicSettings(userId, title) {
+  const { data, error } = await supabase.rpc("ensure_public_page", { page_title: title }); fail(error);
+  const { data: games, error: gamesError } = await supabase.from("upcoming_games").select("*").eq("user_id", userId).order("scheduled_at"); fail(gamesError);
+  return { page: data, games: games || [] };
 }
-export async function updateMemberRole(groupId, userId, role) { const { error } = await supabase.from("group_members").update({ role }).eq("group_id", groupId).eq("user_id", userId); fail(error); }
-export async function removeMember(groupId, userId) { const { error } = await supabase.from("group_members").delete().eq("group_id", groupId).eq("user_id", userId); fail(error); }
-export async function createAttendanceLink(groupId, date, title) { const { data, error } = await supabase.rpc("create_attendance_link", { target_group: groupId, target_date: date, target_title: title }); fail(error); return data; }
-export async function getAttendance(token) { const { data, error } = await supabase.rpc("get_attendance_by_token", { target_token: token }); fail(error); return data; }
-export async function respondAttendance(token, playerId, present) { const { data, error } = await supabase.rpc("respond_attendance", { target_token: token, target_player: playerId, target_present: present }); fail(error); return data; }
-
-export async function loadLatestAttendance(groupId) {
-  const { data: session, error } = await supabase.from("attendance_sessions").select("id,title,game_date").eq("group_id", groupId).eq("open", true).order("created_at", { ascending: false }).limit(1).maybeSingle();
-  fail(error);
-  if (!session) return null;
-  const { data: responses, error: responseError } = await supabase.from("attendance_responses").select("player_id,present").eq("session_id", session.id);
-  fail(responseError);
-  return { ...session, presentIds: (responses || []).filter((item) => item.present).map((item) => item.player_id), responses: responses || [] };
-}
-
-export async function loadPublicGroup(slug) {
-  const { data: group, error } = await supabase.from("groups").select("id,name,public_slug").eq("public_slug", slug).eq("is_public", true).maybeSingle(); fail(error);
-  if (!group) return null;
-  const [players, matches] = await Promise.all([supabase.from("players").select("id,name").eq("group_id", group.id), supabase.from("matches").select("payload,finished_at").eq("group_id", group.id).order("finished_at", { ascending: false }).limit(30)]);
-  fail(players.error); fail(matches.error);
-  return { group, players: players.data || [], history: (matches.data || []).map((item) => item.payload) };
-}
+export async function setPublicEnabled(userId, enabled) { fail((await supabase.from("public_pages").update({ enabled, updated_at: new Date().toISOString() }).eq("user_id", userId)).error); }
+export async function addUpcomingGame(userId, game) { fail((await supabase.from("upcoming_games").insert({ user_id: userId, ...game })).error); }
+export async function deleteUpcomingGame(userId, id) { fail((await supabase.from("upcoming_games").delete().eq("user_id", userId).eq("id", id)).error); }
+export async function getPublicPage(slug, offset = 0) { const { data, error } = await supabase.rpc("get_public_resenha", { target_slug: slug, result_offset: offset, result_limit: HISTORY_PAGE_SIZE }); fail(error); return data; }

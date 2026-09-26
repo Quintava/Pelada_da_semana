@@ -53,31 +53,22 @@ Se uma tentativa antiga deixou uma pasta `node_modules` incompleta, apague somen
 - exercícios cronometrados em segundos, minutos ou horas;
 - checklist e cronômetro independente para cada exercício;
 - página de estatísticas de treino com frequência, volume, tempo e repetições.
-- grupos compartilhados com convite por link ou código;
-- permissões de administrador, mesário e somente visualização;
-- confirmação de presença por link público e importação para a escalação;
-- página pública opcional com ranking e resultados;
-- compartilhamento do resultado como imagem;
-- conquistas automáticas da rodada e lembrete local;
-- instalação como PWA no celular, com cache básico para abertura mais rápida;
-- sincronização incremental em tabelas separadas, evitando reenviar todo o histórico a cada alteração.
+- sincronização incremental: um novo gol cria somente o registro daquele lance, sem reenviar o histórico;
+- histórico carregado em páginas de 10 partidas;
+- página pública somente para leitura com ranking, próximos jogos e resultados.
 
 O login depende do Supabase. Para configurar o banco e a autenticação, siga o arquivo `CONFIGURAR_SUPABASE.md`.
 
 ## Segurança
 
 - o site usa apenas a chave pública do Supabase no navegador;
-- todas as tabelas possuem RLS; jogadores, partidas e configurações obedecem às permissões do grupo;
-- o papel anônimo não recebe acesso à tabela do aplicativo;
+- as tabelas administrativas possuem RLS e restringem cada linha ao dono da conta;
+- visitantes anônimos acessam somente a função pública de leitura, sem permissão direta nas tabelas;
 - nenhuma chave `service_role` ou `sb_secret_` deve ser colocada no GitHub;
 - backups importados são validados, possuem limite de 2 MB e exigem confirmação;
 - o HTML inclui uma política de conteúdo que bloqueia scripts e conexões fora das origens permitidas.
 
-Ao atualizar uma instalação existente, execute novamente todo o conteúdo de `supabase/schema.sql` no SQL Editor. A versão atual cria as tabelas normalizadas, grupos e permissões sem apagar a antiga `app_state`; no primeiro acesso, os dados legados são migrados automaticamente para o grupo padrão.
-
-## Publicação após renomear o repositório
-
-O projeto está configurado para o repositório `Resenha`, portanto o endereço esperado é `https://quintava.github.io/Resenha/`. A letra maiúscula do nome precisa ser preservada nos caminhos. Em **Settings > Pages**, deixe **Source: GitHub Actions**. No Supabase, atualize **Authentication > URL Configuration** para o novo endereço e remova a URL antiga apenas depois de confirmar que o login e a recuperação de senha funcionam.
+Ao atualizar uma instalação existente, execute novamente todo o conteúdo de `supabase/schema.sql` no SQL Editor. O script cria tabelas novas sem apagar `app_state`; a migração ocorre automaticamente no primeiro login.
 
 ## Sugestões automáticas por esporte
 

@@ -9,7 +9,7 @@ Esta configuração é necessária para liberar a tela de login e manter os dado
 3. No painel do projeto, abra **SQL Editor**.
 4. Copie todo o conteúdo de `supabase/schema.sql`, cole no editor e clique em **Run**.
 
-Se o projeto já estava configurado, execute o arquivo inteiro novamente depois desta atualização. Ele mantém a tabela antiga para migração, cria as tabelas separadas de grupos, jogadores, partidas, treinos e presença e atualiza as políticas de segurança.
+Se o projeto já estava configurado, execute o arquivo novamente depois desta atualização. Ele cria as tabelas incrementais sem apagar `app_state`; no primeiro login, os dados antigos são migrados automaticamente e o histórico passa a ser carregado em páginas.
 
 ## 2. Localizar a URL do projeto
 
@@ -86,14 +86,6 @@ No repositório do GitHub, acesse **Settings > Secrets and variables > Actions**
 
 Depois faça um novo commit ou execute novamente o workflow em **Actions**.
 
-## 7. Depois de renomear o repositório
+## 7. Contas e dados separados
 
-1. Confirme que `vite.config.js` contém `base: "/Resenha/"`.
-2. No GitHub, abra **Settings > Pages** e selecione **GitHub Actions** como origem.
-3. Em **Actions**, execute novamente **Publicar no GitHub Pages**.
-4. Os secrets continuam os mesmos e não precisam ser recriados.
-5. O endereço final será `https://quintava.github.io/Resenha/`.
-
-## 8. Contas, grupos e dados
-
-O aplicativo só abre depois do login. Cada conta pode criar ou participar de vários grupos. Os administradores cuidam dos jogadores e permissões; os mesários controlam as partidas; quem está em visualização apenas acompanha. Treinos continuam privados da conta. Cada alteração também fica salva localmente por grupo e é sincronizada automaticamente quando houver internet.
+O painel administrativo só abre depois do login. Cada conta possui jogadores, partidas e artilharia próprios. A página pública entrega apenas ranking, agenda e resultados por uma função de leitura; visitantes não recebem permissão de escrita. A sincronização separa partidas e lances, enviando somente os registros alterados.

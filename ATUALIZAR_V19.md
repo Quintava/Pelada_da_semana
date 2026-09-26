@@ -1,5 +1,7 @@
 # Atualização para a versão 1.9
 
+> Correção 1.9.1: ajustada a ordem de inicialização do cronograma ativo, que podia interromper o React e deixar a página branca. Também foi adicionada uma tela de recuperação para erros inesperados.
+
 ## Novas regras de avaliação
 
 - vitória: `+0,4`;

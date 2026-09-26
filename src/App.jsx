@@ -613,6 +613,10 @@ export default function Home() {
   const authSubmittingRef = useRef(false);
   const cloudLoadedUser = useRef(null);
 
+  // Atalhos do estado precisam existir antes dos cálculos derivados abaixo.
+  const match = data.activeMatch;
+  const activeTraining = data.activeTraining;
+
   // Dados derivados usados por mais de uma tela.
   const playerStats = useMemo(
     () => buildPlayerStats(data.players, data.history),
@@ -2039,8 +2043,6 @@ export default function Home() {
       />
     );
   if (!ready) return <main className="app-shell loading">Preparando o Resenha…</main>;
-  const match = data.activeMatch;
-  const activeTraining = data.activeTraining;
   const currentRankingKind = sportKind(statsSport);
   const primaryRanking = currentRankingKind === "football" ? generalRanking : goalsRanking;
   const totalScores = goalsRanking.reduce((sum, player) => sum + player.goals, 0);
